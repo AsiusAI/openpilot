@@ -13,6 +13,9 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"ApiCache_FirehoseStats", {PERSISTENT, JSON}},
     {"AssistNowToken", {PERSISTENT, STRING}},
     {"AthenadPid", {PERSISTENT, INT}},
+    {"AthenadAuthorizedKeys", {PERSISTENT, JSON}},
+    {"AthenadAuthorizedKeysEpoch", {PERSISTENT, INT}},
+    {"AthenadPairingUntil", {PERSISTENT, INT}},
     {"AthenadUploadQueue", {PERSISTENT, JSON}},
     {"AthenadRecentlyViewedRoutes", {PERSISTENT, STRING}},
     {"BootCount", {PERSISTENT, INT}},
@@ -129,4 +132,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"UsbGpuActive", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
     {"UsbGpuLoading", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
     {"Version", {PERSISTENT, STRING}},
+
+    // Asius
+    {"APIHost", {PERSISTENT, STRING, "https://api.asius.ai"}},
+    {"AthenaHost", {PERSISTENT, STRING, "wss://athena.asius.ai"}},
 };
