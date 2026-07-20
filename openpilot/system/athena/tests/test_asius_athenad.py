@@ -1,5 +1,6 @@
 import pytest
 from functools import wraps
+import json
 import multiprocessing
 import os
 import requests
@@ -108,6 +109,17 @@ class TestAthenadMethods:
 
   def test_echo(self):
     assert dispatcher["echo"]("bob") == "bob"
+
+  def test_software_update_state_is_json_serializable(self, mocker):
+    timestamp = datetime(2026, 7, 20, 12, 16, 37)
+    params = mocker.Mock()
+    params.get.side_effect = lambda key: timestamp if key in {"UpdaterLastFetchTime", "LastUpdateTime"} else None
+
+    state = athenad._software_update_state(params)
+
+    assert state["UpdaterLastFetchTime"] == str(timestamp)
+    assert state["LastUpdateTime"] == str(timestamp)
+    json.dumps(state)
 
   def test_get_message(self):
     with pytest.raises(TimeoutError) as _:

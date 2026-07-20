@@ -92,7 +92,6 @@ LIVE_STATE_SERVICES = [
 LIVE_STATE_PARAM_KEYS = [
   "DongleId",
   "HardwareSerial",
-  "IsOnroad",
   "LastAthenaPingTime",
   "OpenpilotEnabledToggle",
   "ExperimentalMode",
@@ -120,7 +119,6 @@ LIVE_STATE_PARAM_KEYS = [
   "UpdaterTargetBranch",
   "UpdaterAvailableBranches",
   "CalibrationParams",
-  "LiveParameters",
   "LiveTorqueParameters",
 ]
 
@@ -833,7 +831,7 @@ def _software_update_state(params: Params | None = None) -> dict[str, str | bool
     value = params.get(key)
     if isinstance(value, bytes):
       value = value.decode("utf-8", "replace")
-    state[key] = value
+    state[key] = _json_safe(value)
   return state
 
 
