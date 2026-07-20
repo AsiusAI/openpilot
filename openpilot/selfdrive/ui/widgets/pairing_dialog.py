@@ -1,10 +1,10 @@
 import pyray as rl
 import time
 
-from openpilot.common.api import Api
 from openpilot.common.qrcode import make_texture
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
+from openpilot.system.athena.websocketd import PAIRING_MODE_SECONDS, pairing_url
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.multilang import tr
@@ -17,7 +17,7 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 class PairingDialog(Widget):
   """Dialog for device pairing with QR code."""
 
-  QR_REFRESH_INTERVAL = 300  # 5 minutes in seconds
+  QR_REFRESH_INTERVAL = PAIRING_MODE_SECONDS
 
   def __init__(self):
     super().__init__()
@@ -30,11 +30,10 @@ class PairingDialog(Widget):
   def _get_pairing_url(self) -> str:
     try:
       dongle_id = self.params.get("DongleId") or ""
-      token = Api(dongle_id).get_token({'pair': True})
+      return pairing_url(dongle_id)
     except Exception:
       cloudlog.exception("Failed to get pairing token")
-      token = ""
-    return f"https://connect.comma.ai/?pair={token}"
+      return ""
 
   def _generate_qr_code(self) -> None:
     try:
@@ -73,7 +72,7 @@ class PairingDialog(Widget):
     y += close_size + 40
 
     # Title
-    title = tr("Pair your device to your comma account")
+    title = tr("Pair your device with Asius App")
     title_font = gui_app.font(FontWeight.NORMAL)
     left_width = int(content_rect.width * 0.5 - 15)
 
@@ -98,9 +97,9 @@ class PairingDialog(Widget):
 
   def _render_instructions(self, rect: rl.Rectangle) -> None:
     instructions = [
-      tr("Go to https://connect.comma.ai on your phone"),
+      tr("Go to https://app.asius.ai on your phone"),
       tr("Click \"add new device\" and scan the QR code on the right"),
-      tr("Bookmark connect.comma.ai to your home screen to use it like an app"),
+      tr("Bookmark app.asius.ai to your home screen to use it like an app"),
     ]
 
     font = gui_app.font(FontWeight.BOLD)

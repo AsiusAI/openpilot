@@ -76,7 +76,7 @@ procs = [
   PythonProcess("logmessaged", "openpilot.system.logmessaged", always_run),
 
   NativeProcess("camerad", "openpilot/system/camerad", ["./camerad"], or_(driverview, livestream), enabled=not WEBCAM),
-  PythonProcess("webcamerad", "openpilot.system.camerad.webcam.camerad", driverview, enabled=WEBCAM),
+  PythonProcess("webcamerad", "openpilot.system.camerad.webcam.camerad", or_(driverview, livestream), enabled=WEBCAM),
   PythonProcess("proclogd", "openpilot.system.proclogd", only_onroad, enabled=platform.system() != "Darwin"),
   PythonProcess("journald", "openpilot.system.journald", only_onroad, platform.system() != "Darwin"),
   PythonProcess("micd", "openpilot.system.micd", iscar),

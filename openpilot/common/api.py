@@ -1,15 +1,13 @@
+from pathlib import Path
+
 import jwt
-import os
 import requests
 from datetime import datetime, timedelta, UTC
 from openpilot.common.hardware.hw import Paths
+from openpilot.common.params import Params
 from openpilot.common.version import get_version
 
-API_HOST = os.getenv('API_HOST', 'https://api.commadotai.com')
-
-# name: jwt signature algorithm
-KEYS = {"id_rsa": "RS256",
-        "id_ecdsa": "ES256"}
+API_HOST = Params().get("APIHost", return_default=True)
 
 
 class Api:
@@ -57,8 +55,10 @@ def api_get(endpoint, method='GET', timeout=None, access_token=None, session=Non
 
 
 def get_key_pair() -> tuple[str, str, str] | tuple[None, None, None]:
-  for key in KEYS:
-    if os.path.isfile(Paths.persist_root() + f'/comma/{key}') and os.path.isfile(Paths.persist_root() + f'/comma/{key}.pub'):
-      with open(Paths.persist_root() + f'/comma/{key}') as private, open(Paths.persist_root() + f'/comma/{key}.pub') as public:
-        return KEYS[key], private.read(), public.read()
+  key_path = Path(Paths.persist_root()) / "comma" / "id_ed25519"
+  public_key_path = key_path.with_suffix(".pub")
+  private_key_path = key_path
+  if private_key_path.is_file() and public_key_path.is_file():
+    with private_key_path.open() as private, public_key_path.open() as public:
+      return "EdDSA", private.read(), public.read()
   return None, None, None
