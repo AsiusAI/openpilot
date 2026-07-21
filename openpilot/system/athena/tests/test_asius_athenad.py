@@ -411,21 +411,17 @@ class TestAthenadMethods:
       ws_recv.put_nowait(WebSocketConnectionClosedException())
       socket_thread.join()
 
-  def test_start_stream_uses_livestream_processes(self, mocker):
-    wait_for_webrtcd = mocker.patch("openpilot.system.webrtc.helpers.wait_for_webrtcd")
-    post_stream_request = mocker.patch("openpilot.system.webrtc.helpers.post_stream_request", return_value={"sdp": "answer"})
+  def test_start_stream_uses_upstream_handler(self, mocker):
+    start_stream = mocker.patch("openpilot.system.athena.athenad.startStream", return_value={"sdp": "answer"})
 
     assert dispatcher["startStream"]("offer") == {"sdp": "answer"}
-    assert self.params.get_bool("IsLiveStreaming")
-    wait_for_webrtcd.assert_called_once()
-    post_stream_request.assert_called_once()
+    start_stream.assert_called_once_with("offer", True)
 
-  def test_start_stream_failure_stops_livestream_processes(self, mocker):
-    mocker.patch("openpilot.system.webrtc.helpers.wait_for_webrtcd", side_effect=RuntimeError("webrtcd unavailable"))
+  def test_start_stream_forwards_disabled(self, mocker):
+    start_stream = mocker.patch("openpilot.system.athena.athenad.startStream", return_value={"sdp": "answer"})
 
-    with pytest.raises(RuntimeError, match="webrtcd unavailable"):
-      dispatcher["startStream"]("offer")
-    assert not self.params.get_bool("IsLiveStreaming")
+    assert dispatcher["startStream"]("offer", False) == {"sdp": "answer"}
+    start_stream.assert_called_once_with("offer", False)
 
   def test_get_ssh_authorized_keys(self):
     keys = dispatcher["getSshAuthorizedKeys"]()

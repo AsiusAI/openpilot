@@ -118,8 +118,6 @@ LIVE_STATE_PARAM_KEYS = [
   "UpdaterCurrentDescription",
   "UpdaterTargetBranch",
   "UpdaterAvailableBranches",
-  "CalibrationParams",
-  "LiveTorqueParameters",
 ]
 
 # https://bytesolutions.com/dscp-tos-cos-precedence-conversion-chart,
@@ -949,21 +947,8 @@ def installSoftwareUpdate() -> dict[str, int]:
 
 @dispatcher.add_method
 def startStream(sdp: str, enabled: bool = True) -> dict:
-  from openpilot.system.webrtc.helpers import StreamRequestBody, post_stream_request, wait_for_webrtcd
-  params = Params()
-  params.put_bool("IsLiveStreaming", True, block=True)
-  try:
-    wait_for_webrtcd()
-    return post_stream_request(StreamRequestBody(
-      sdp=sdp,
-      init_camera="wideRoad",
-      enabled=enabled,
-      bridge_services_in=["testJoystick"],
-      bridge_services_out=["modelV2", "radarState", "carState", "controlsState", "selfdriveState", "liveCalibration"],
-    ))
-  except Exception:
-    params.put_bool("IsLiveStreaming", False, block=True)
-    raise
+  from openpilot.system.athena.athenad import startStream as upstream_start_stream
+  return upstream_start_stream(sdp, enabled)
 
 
 def _json_safe(value: Any) -> Any:
@@ -1211,7 +1196,7 @@ def ws_manage(ws: WebSocket, end_event: threading.Event) -> None:
   sock = ws.sock
 
   while True:
-    onroad = params.get_bool("IsOnroad")
+    onroad = not params.get_bool("IsOffroad")
     if onroad != onroad_prev:
       onroad_prev = onroad
 
