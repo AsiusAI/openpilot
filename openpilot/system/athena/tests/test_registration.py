@@ -1,6 +1,7 @@
+import tempfile
 from pathlib import Path
+from unittest import mock
 
-import pytest
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
 
@@ -20,12 +21,11 @@ from openpilot.common.hardware.hw import Paths
 
 class TestRegistration(OpenpilotTestCase):
 
-  @pytest.fixture(autouse=True)
-  def setup_identity_root(self, tmp_path, monkeypatch):
+  def setup_method(self):
     self.params = Params()
 
-    persist_root = tmp_path / "persist"
-    monkeypatch.setattr(Paths, "persist_root", staticmethod(lambda: str(persist_root)))
+    persist_root = Path(self.enterContext(tempfile.TemporaryDirectory())) / "persist"
+    self.enterContext(mock.patch.object(Paths, "persist_root", staticmethod(lambda: str(persist_root))))
 
     persist_dir = Path(Paths.persist_root()) / "comma"
     persist_dir.mkdir(parents=True, exist_ok=True)
@@ -76,8 +76,8 @@ class TestRegistration(OpenpilotTestCase):
     dongle = register()
     assert dongle == dongle_id_from_public_key(public_key)
 
-  def test_key_create_failure(self, monkeypatch):
-    monkeypatch.setattr("openpilot.system.athena.registration.ed25519.Ed25519PrivateKey.generate", lambda: (_ for _ in ()).throw(OSError("no write")))
+  def test_key_create_failure(self, mocker):
+    mocker.patch("openpilot.system.athena.registration.ed25519.Ed25519PrivateKey.generate", side_effect=OSError("no write"))
 
     dongle = register()
     assert dongle == UNREGISTERED_DONGLE_ID

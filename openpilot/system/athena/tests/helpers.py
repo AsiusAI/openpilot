@@ -1,3 +1,4 @@
+import contextlib
 import http.server
 import socket
 
@@ -28,9 +29,11 @@ class EchoSocket:
         else:
           break
     finally:
-      conn.shutdown(0)
+      with contextlib.suppress(OSError):
+        conn.shutdown(0)
       conn.close()
-      self.socket.shutdown(0)
+      with contextlib.suppress(OSError):
+        self.socket.shutdown(0)
       self.socket.close()
 
 
@@ -44,6 +47,7 @@ class MockApi:
 
 class MockWebsocket:
   def __init__(self, recv_queue, send_queue):
+    self.sock = socket.socket()
     self.recv_queue = recv_queue
     self.send_queue = send_queue
     self.sock = socket.socket()
