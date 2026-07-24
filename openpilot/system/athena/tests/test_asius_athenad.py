@@ -1,9 +1,9 @@
-import pytest
 from functools import wraps
 import json
 import multiprocessing
 import os
 import requests
+import select
 import shutil
 import time
 import threading
@@ -15,8 +15,9 @@ from websocket import ABNF
 from websocket._exceptions import WebSocketConnectionClosedException
 
 from openpilot.cereal import messaging
-
+from openpilot.common.parameterized import parameterized
 from openpilot.common.params import Params
+from openpilot.common.test import OpenpilotTestCase
 from openpilot.common.timeout import Timeout
 from openpilot.system.athena import asius_athenad as athenad
 from openpilot.system.athena.asius_athenad import MAX_RETRY_COUNT, UPLOAD_SESS, dispatcher
@@ -47,16 +48,21 @@ def with_upload_handler(func):
       thread.join()
   return wrapper
 
-@pytest.fixture
 def mock_create_connection(mocker):
-    return mocker.patch('openpilot.system.athena.asius_athenad.create_connection')
+  return mocker.patch('openpilot.system.athena.asius_athenad.create_connection')
 
-@pytest.fixture
 def host():
   with http_server_context(handler=HTTPRequestHandler, setup=seed_athena_server) as (host, port):
     yield f"http://{host}:{port}"
 
-class TestAthenadMethods:
+def send_device_state(end_event):
+  pub_sock = messaging.pub_sock("deviceState")
+  while not end_event.is_set():
+    msg = messaging.new_message('deviceState')
+    pub_sock.send(msg.to_bytes())
+    time.sleep(0.01)
+
+class TestAthenadMethods(OpenpilotTestCase):
   @classmethod
   def setup_class(cls):
     cls.SOCKET_PORT = 45455
@@ -122,20 +128,12 @@ class TestAthenadMethods:
     json.dumps(state)
 
   def test_get_message(self):
-    with pytest.raises(TimeoutError) as _:
+    with self.assertRaises(TimeoutError):
       dispatcher["getMessage"]("controlsState")
 
     end_event = multiprocessing.Event()
 
-    pub_sock = messaging.pub_sock("deviceState")
-
-    def send_deviceState():
-      while not end_event.is_set():
-        msg = messaging.new_message('deviceState')
-        pub_sock.send(msg.to_bytes())
-        time.sleep(0.01)
-
-    p = multiprocessing.Process(target=send_deviceState)
+    p = multiprocessing.Process(target=send_device_state, args=(end_event,))
     p.start()
     time.sleep(0.1)
     try:
@@ -195,14 +193,14 @@ class TestAthenadMethods:
     if fn.endswith('.zst'):
       assert athenad.strip_zst_extension(fn) == fn[:-4]
 
-  @pytest.mark.parametrize("compress", [True, False])
+  @parameterized.expand([True, False], names=("compress",))
   def test_do_upload(self, host, compress):
     # random bytes to ensure rather large object post-compression
     fn = self._create_file('qlog', data=os.urandom(10000 * 1024))
 
     upload_fn = fn + ('.zst' if compress else '')
     item = athenad.UploadItem(path=upload_fn, url="http://localhost:1238", headers={}, created_at=int(time.time()*1000), id='')  # noqa: TID251
-    with pytest.raises(requests.exceptions.ConnectionError):
+    with self.assertRaises(requests.exceptions.ConnectionError):
       athenad._do_upload(item)
 
     item = athenad.UploadItem(path=upload_fn, url=f"{host}/qlog.zst", headers={}, created_at=int(time.time()*1000), id='')  # noqa: TID251
@@ -247,7 +245,7 @@ class TestAthenadMethods:
     # TODO: also check that end_event and metered network raises AbortTransferException
     assert athenad.upload_queue.qsize() == 0
 
-  @pytest.mark.parametrize("status,retry", [(500,True), (412,False)])
+  @parameterized.expand([(500,True), (412,False)], names=("status", "retry"))
   @with_upload_handler
   def test_upload_handler_retry(self, mocker, host, status, retry):
     mock_put = mocker.patch('openpilot.system.athena.asius_athenad.UPLOAD_SESS.put')
@@ -388,13 +386,18 @@ class TestAthenadMethods:
     assert athenad.upload_queue.qsize() == 1
     assert asdict(athenad.upload_queue.queue[-1]) == asdict(item1)
 
-  def test_start_local_proxy(self, mock_create_connection):
+  def test_start_local_proxy(self, mocker, mock_create_connection):
     end_event = threading.Event()
 
     ws_recv = queue.Queue()
     ws_send = queue.Queue()
     mock_ws = MockWebsocket(ws_recv, ws_send)
     mock_create_connection.return_value = mock_ws
+
+    real_select = select.select
+    select_mock = mocker.patch("openpilot.system.athena.asius_athenad.select.select")
+    select_mock.side_effect = lambda read, write, error, timeout=None: \
+      (read, [], []) if read == (mock_ws.sock,) else real_select(read, write, error, timeout)
 
     echo_socket = EchoSocket(self.SOCKET_PORT)
     socket_thread = threading.Thread(target=echo_socket.run)
