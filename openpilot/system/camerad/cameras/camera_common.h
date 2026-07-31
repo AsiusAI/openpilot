@@ -1,5 +1,6 @@
 #pragma once
 
+#include <fcntl.h>
 #include <memory>
 
 #include "openpilot/cereal/messaging/messaging.h"

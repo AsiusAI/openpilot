@@ -6,8 +6,24 @@
 #include <utility>
 #include <vector>
 
+#if __has_include("media/cam_isp.h") && __has_include("media/cam_sensor.h")
 #include "media/cam_isp.h"
 #include "media/cam_sensor.h"
+#else
+struct i2c_random_wr_payload {
+  uint32_t reg_addr;
+  uint32_t reg_data;
+};
+
+#define CAM_ISP_PATTERN_BAYER_RGRGRG 0
+#define CAM_ISP_PATTERN_BAYER_GRGRGR 1
+#define CAM_ISP_PATTERN_BAYER_BGBGBG 2
+#define CAM_ISP_PATTERN_BAYER_GBGBGB 3
+#define CAM_FORMAT_MIPI_RAW_10 10
+#define CAM_FORMAT_MIPI_RAW_12 12
+#define CSI_RAW10 0x2b
+#define CSI_RAW12 0x2c
+#endif
 
 #include "openpilot/cereal/gen/cpp/log.capnp.h"
 #include "system/camerad/sensors/ox03c10_registers.h"

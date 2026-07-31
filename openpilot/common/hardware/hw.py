@@ -41,8 +41,10 @@ class Paths:
   def persist_root() -> str:
     if PC:
       return os.path.join(Paths.comma_home(), "persist")
-    else:
+    elif os.path.isfile("/ASIUS"):
       return "/data/persist/"
+    else:
+      return "/persist/"
 
   @staticmethod
   def config_root() -> str:

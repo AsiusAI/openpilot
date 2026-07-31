@@ -11,13 +11,16 @@ from openpilot.common.utils import sudo_write
 from openpilot.common.realtime import config_realtime_process, Ratekeeper
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.gpio import gpiochip_get_ro_value_fd, gpioevent_data
+from openpilot.common.hardware import ASIUS
 
 from openpilot.system.sensord.sensors.i2c_sensor import Sensor
 from openpilot.system.sensord.sensors.lsm6ds3_accel import LSM6DS3_Accel
 from openpilot.system.sensord.sensors.lsm6ds3_gyro import LSM6DS3_Gyro
 from openpilot.system.sensord.sensors.lsm6ds3_temp import LSM6DS3_Temp
 
-I2C_BUS_IMU = 1
+I2C_BUS_IMU = 6 if ASIUS else 1
+IMU_GPIOCHIP = 0
+IMU_INTERRUPT_PIN = 0 if ASIUS else 84
 
 def interrupt_loop(sensors: list[tuple[Sensor, str, bool]], event) -> None:
   pm = messaging.PubMaster([service for sensor, service, interrupt in sensors if interrupt])
@@ -29,14 +32,15 @@ def interrupt_loop(sensors: list[tuple[Sensor, str, bool]], event) -> None:
   # Requesting both edges as the data ready pulse from the lsm6ds sensor is
   # very short (75us) and is mostly detected as falling edge instead of rising.
   # So if it is detected as rising the following falling edge is skipped.
-  fd = gpiochip_get_ro_value_fd("sensord", 0, 84)
+  fd = gpiochip_get_ro_value_fd("sensord", IMU_GPIOCHIP, IMU_INTERRUPT_PIN)
 
   # Configure IRQ affinity
-  irq_path = "/proc/irq/336/smp_affinity_list"
-  if not os.path.exists(irq_path):
-    irq_path = "/proc/irq/335/smp_affinity_list"
-  if os.path.exists(irq_path):
-    sudo_write('1\n', irq_path)
+  if not ASIUS:
+    irq_path = "/proc/irq/336/smp_affinity_list"
+    if not os.path.exists(irq_path):
+      irq_path = "/proc/irq/335/smp_affinity_list"
+    if os.path.exists(irq_path):
+      sudo_write('1\n', irq_path)
 
   offset = time.time_ns() - time.monotonic_ns()
 

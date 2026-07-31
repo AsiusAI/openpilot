@@ -1,0 +1,185 @@
+#pragma once
+
+#include "system/camerad/cameras/cdm_v1.h"
+#include "system/camerad/cameras/hw.h"
+#include "system/camerad/sensors/sensor.h"
+
+// flat register list builders for mainline kernel (same register values, no CDM encoding)
+
+void collect_common_ife_yuv(std::vector<reg_write> &regs) {
+  collect_cont(regs, 0xf30, {
+    0x00680208, 0x00000108, 0x00400000, 0x03ff0000,
+    0x01c01ed8, 0x00001f68, 0x02000000, 0x03ff0000,
+    0x1fb81e88, 0x000001c0, 0x02000000, 0x03ff0000,
+  });
+}
+
+std::vector<reg_write> build_update_flat(const CameraConfig &cam, const SensorInfo *s) {
+  std::vector<reg_write> regs;
+
+  // CGC override
+  collect_random(regs, {
+    0x2c, 0xffffffff, 0x30, 0xffffffff, 0x34, 0xffffffff,
+    0x38, 0xffffffff, 0x3c, 0xffffffff,
+  });
+
+  // demux cfg
+  collect_cont(regs, 0x560, {
+    0x00000001, 0x04440444, 0x04450445,
+    0x04440444, 0x04450445, 0x000000ca, 0x0000009c,
+  });
+
+  // white balance
+  collect_cont(regs, 0x6fc, {0x00800080, 0x00000080, 0x00000000, 0x00000000});
+
+  // module enables
+  collect_cont(regs, 0x40, {0x00000c06 | ((uint32_t)(cam.vignetting_correction) << 8)});
+  collect_cont(regs, 0x44, {0x00000000});
+  collect_cont(regs, 0x48, {(1 << 3) | (1 << 1)});
+  collect_cont(regs, 0x4c, {0x00000019});
+  collect_cont(regs, 0xf00, {0x00000000});
+
+  // cropping
+  collect_cont(regs, 0xe0c, {0x00000e00});
+  collect_cont(regs, 0xe2c, {0x00000e00});
+
+  // black level
+  collect_cont(regs, 0x6b0, {
+    ((uint32_t)(1 << 11) << 0xf) | (s->black_level << (14 - s->bits_per_pixel)),
+    0x0, 0x0,
+  });
+
+  return regs;
+}
+
+std::pair<std::vector<reg_write>, std::vector<dmi_upload>>
+build_initial_config_flat(const CameraConfig &cam, const SensorInfo *s, uint32_t out_width, uint32_t out_height) {
+  // start with per-frame update
+  auto regs = build_update_flat(cam, s);
+  std::vector<dmi_upload> dmis;
+
+  // CGC override: force clocks on for all ISP modules
+  collect_cont(regs, 0x02c, {0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff});
+
+  // Module enables
+  // LENS_EN: BLACK(1) + DEMUX(2) + DEMO(10) + BLACK_LEVEL(11)
+  // COLOR_EN: COLOR_CORRECT(1) + RGB_LUT(3)
+  // ZOOM_EN: Y_SCALER(0) + UV_SCALER(3) + Y_CROP(4)
+  collect_cont(regs, 0x040, {0x00000c06, 0x00000000, 0x0000000a, 0x00000019});
+
+  // The Dragon flat-register path uses Titan's CORE_CFG encoding directly.
+  // This CamThink OS04 module is RGGB (RGRGRG=0).
+  const uint32_t bayer_pattern =
+      s->image_sensor == cereal::FrameData::ImageSensor::OS04C10 ? 0 : s->bayer_pattern;
+  collect_cont(regs, 0x050, {bayer_pattern});
+
+  // CAMIF setup
+  collect_cont(regs, 0x478, {0x00000004, 0x004000c0});
+  collect_cont(regs, 0x488, {0x00000000, 0x00000000, 0x00000f0f});
+  collect_cont(regs, 0x49c, {0x00000001});
+  // CAMIF raw crop: full frame
+  collect_cont(regs, 0xce4, {s->frame_width - 1, s->frame_height - 1});
+  // EPOCH IRQ at half frame
+  collect_cont(regs, 0x4a0, {((s->frame_height / 2) << 16) | 0x14});
+
+  // linearization
+  collect_cont(regs, 0x4dc, {0x00000000});
+  collect_cont(regs, 0x4e0, s->linearization_pts);
+  collect_cont(regs, 0x4f0, s->linearization_pts);
+  collect_cont(regs, 0x500, s->linearization_pts);
+  collect_cont(regs, 0x510, s->linearization_pts);
+  dmis.push_back({0xc24, 9, s->linearization_lut.data(), (uint32_t)s->linearization_lut.size()});
+
+  // vignetting correction
+  collect_cont(regs, 0x6bc, {0x0b3c0000, 0x00670067, 0xd3b1300c, 0x13b1300c});
+  collect_cont(regs, 0x6d8, {0xec4e4000, 0x0100c003});
+  dmis.push_back({0xc24, 14, s->vignetting_lut.data(), (uint32_t)s->vignetting_lut.size()});  // GRR
+  dmis.push_back({0xc24, 15, s->vignetting_lut.data(), (uint32_t)s->vignetting_lut.size()});  // GBB
+
+  // debayer
+  collect_cont(regs, 0x6f8, {0x00000100});
+  collect_cont(regs, 0x71c, {0x00008000, 0x08000066});
+
+  // color correction
+  collect_cont(regs, 0x760, s->color_correct_matrix);
+
+  // gamma
+  collect_cont(regs, 0x798, {0x00000000});
+  dmis.push_back({0xc24, 26, s->gamma_lut_rgb.data(), (uint32_t)s->gamma_lut_rgb.size()});  // G
+  dmis.push_back({0xc24, 28, s->gamma_lut_rgb.data(), (uint32_t)s->gamma_lut_rgb.size()});  // B
+  dmis.push_back({0xc24, 30, s->gamma_lut_rgb.data(), (uint32_t)s->gamma_lut_rgb.size()});  // R
+
+  // scaler Y
+  collect_cont(regs, 0xa3c, {
+    0x00000003,
+    ((out_width - 1) << 16) | (s->frame_width - 1),
+    0x30036666, 0x00000000, 0x00000000,
+    s->frame_width - 1,
+    ((out_height - 1) << 16) | (s->frame_height - 1),
+    0x30036666, 0x00000000, 0x00000000,
+    s->frame_height - 1,
+  });
+
+  // scaler UV
+  collect_cont(regs, 0xa68, {
+    0x00000003,
+    ((out_width / 2 - 1) << 16) | (s->frame_width - 1),
+    0x3006cccc, 0x00000000, 0x00000000,
+    s->frame_width - 1,
+    ((out_height / 2 - 1) << 16) | (s->frame_height - 1),
+    0x3006cccc, 0x00000000, 0x00000000,
+    s->frame_height - 1,
+  });
+
+  // crop Y
+  collect_cont(regs, 0xe10, {out_height - 1, out_width - 1});
+  collect_cont(regs, 0xe30, {out_height / 2 - 1, out_width - 1});
+  collect_cont(regs, 0xe18, {0x0ff00000, 0x00000016});
+  collect_cont(regs, 0xe38, {0x0ff00000, 0x00000017});
+
+  // YUV conversion
+  collect_common_ife_yuv(regs);
+
+  // ISP flush/halt config
+  collect_cont(regs, 0xf80, {0x01010000, 0x01010000, 0x01010000, 0x01010000});
+  // Dual PD CGC override
+  collect_cont(regs, 0xfac, {0x00000001});
+
+  // VFE BUS: PIX output enable - route ISP output to WM3 (Y) + WM4 (UV)
+  collect_cont(regs, 0x2018, {(1 << 3) | (1 << 4)});  // BIT(3)|BIT(4) = WM3+WM4
+  // Composite group 0: WM3+WM4 for composite done IRQ.
+  // VFE170 BUS2 puts the regular comp-group mask at 0x2010; 0x2070 is status.
+  collect_cont(regs, 0x2010, {(1 << 3) | (1 << 4)});
+  // WM output port mapping: WM3+WM4 -> port 0x16 (PIX processed output)
+  collect_cont(regs, 0x25a0, {0x16});  // WM3: 0x2200 + 3*0x100 + 0xa0
+  collect_cont(regs, 0x26a0, {0x16});  // WM4: 0x2200 + 4*0x100 + 0xa0
+
+  // WM3 (Y plane) dimensions — override kernel's vfe_wm_start() values
+  // Register layout: base 0x2200 + wm*0x100
+  uint32_t wm3 = 0x2200 + 3 * 0x100;  // 0x2500
+  uint32_t wm4 = 0x2200 + 4 * 0x100;  // 0x2600
+  uint32_t nv12_stride = out_width;    // 1 byte per Y pixel
+  collect_random(regs, {
+    wm3 + 0x1c, out_width,              // BUFFER_WIDTH_CFG
+    wm3 + 0x20, out_height,             // BUFFER_HEIGHT_CFG
+    wm3 + 0x24, 0x0e,                   // PACKER_CFG (QCOM_PLAIN NV12)
+    wm3 + 0x28, nv12_stride,            // STRIDE
+    wm3 + 0x48, 0,                      // IRQ_SUBSAMPLE_PERIOD
+    wm3 + 0x4c, 1,                      // IRQ_SUBSAMPLE_PATTERN (pass all)
+    wm3 + 0x50, 0,                      // FRAMEDROP_PERIOD
+    wm3 + 0x54, 1,                      // FRAMEDROP_PATTERN (pass all)
+    wm3 + 0x58, nv12_stride * out_height, // FRAME_INC
+    // WM4 (UV plane)
+    wm4 + 0x1c, out_width,
+    wm4 + 0x20, out_height / 2,
+    wm4 + 0x24, 0x0e,
+    wm4 + 0x28, nv12_stride,
+    wm4 + 0x48, 0,
+    wm4 + 0x4c, 1,
+    wm4 + 0x50, 0,
+    wm4 + 0x54, 1,
+    wm4 + 0x58, nv12_stride * out_height / 2,
+  });
+
+  return {regs, dmis};
+}

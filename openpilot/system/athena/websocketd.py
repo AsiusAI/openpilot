@@ -103,6 +103,13 @@ def write_raw_param(key: str, value: str) -> None:
   os.replace(tmp_path, path)
 
 
+def remove_raw_param(key: str) -> None:
+  try:
+    (PARAMS_DIR / key).unlink()
+  except FileNotFoundError:
+    pass
+
+
 def get_acl_epoch() -> int:
   try:
     return int(read_raw_param(ATHENA_ACL_EPOCH_PARAM) or "0")
@@ -120,6 +127,10 @@ def enable_pairing_mode(duration_seconds: int = PAIRING_MODE_SECONDS) -> int:
   pairing_until = int(wall_time()) + duration_seconds
   write_raw_param(ATHENA_PAIRING_UNTIL_PARAM, str(pairing_until))
   return pairing_until
+
+
+def disable_pairing_mode() -> None:
+  remove_raw_param(ATHENA_PAIRING_UNTIL_PARAM)
 
 
 def pairing_mode_active() -> bool:
@@ -254,7 +265,7 @@ def payload_key(shared: bytes, sender: str, recipient: str) -> bytes:
   ).derive(shared)
 
 
-def encrypt_payload(text: str, sender: str, recipient: str) -> str:
+def encrypt_payload(text: str, sender: str, recipient: str, timestamp: int | None = None) -> str:
   shared = x25519_private_from_identity().exchange(x25519_public_from_identity(recipient))
   iv = os.urandom(12)
   envelope = {
@@ -263,7 +274,7 @@ def encrypt_payload(text: str, sender: str, recipient: str) -> str:
     "from": sender,
     "to": recipient,
     "iv": base64url_encode(iv),
-    "ts": int(wall_time()),
+    "ts": int(wall_time()) if timestamp is None else timestamp,
   }
   aad = stable_json(envelope).encode()
   ciphertext = AESGCM(payload_key(shared, sender, recipient)).encrypt(iv, text.encode(), aad)
@@ -272,12 +283,12 @@ def encrypt_payload(text: str, sender: str, recipient: str) -> str:
   return json.dumps({**signed, "sig": base64url_encode(signature)})
 
 
-def pack_peer_message(sender: str, recipient: str, body: dict) -> str:
+def pack_peer_message(sender: str, recipient: str, body: dict, timestamp: int | None = None) -> str:
   return json.dumps({
     "type": "peer",
     "from": sender,
     "to": recipient,
-    "payload": encrypt_payload(json.dumps(body), sender, recipient),
+    "payload": encrypt_payload(json.dumps(body), sender, recipient, timestamp=timestamp),
   })
 
 
@@ -295,13 +306,13 @@ def verify_pair_token(token: str | None, recipient: str) -> bool:
     return False
 
 
-def decrypt_payload(payload: str, sender: str, recipient: str) -> str | None:
+def decrypt_payload(payload: str, sender: str, recipient: str, validate_timestamp: bool = True) -> str | None:
   try:
     encrypted = json.loads(payload)
     if encrypted.get("v") == 4 and encrypted.get("alg") == "Ed25519-X25519-HKDF-SHA256-A256GCM":
       if encrypted.get("from") != sender or encrypted.get("to") != recipient:
         return None
-      if not payload_timestamp_valid(encrypted.get("ts")):
+      if validate_timestamp and not payload_timestamp_valid(encrypted.get("ts")):
         return None
 
       signature = encrypted["sig"]
@@ -320,7 +331,7 @@ def decrypt_payload(payload: str, sender: str, recipient: str) -> str | None:
     return None
 
 
-def unpack_peer_message(data: str, recipient: str) -> tuple[str, dict | None, bool] | None:
+def unpack_peer_message(data: str, recipient: str, validate_timestamp: bool = True) -> tuple[str, dict | None, bool] | None:
   message = json.loads(data)
   if message.get("type") != "peer":
     return None
@@ -329,8 +340,18 @@ def unpack_peer_message(data: str, recipient: str) -> tuple[str, dict | None, bo
   if message.get("to") != recipient:
     return sender, None, False
 
-  plaintext = decrypt_payload(message["payload"], sender, recipient)
+  plaintext = decrypt_payload(message["payload"], sender, recipient, validate_timestamp=validate_timestamp)
   return sender, json.loads(plaintext) if plaintext is not None else None, plaintext is None
+
+
+def peer_message_timestamp(data: str) -> int | None:
+  try:
+    message = json.loads(data)
+    encrypted = json.loads(message["payload"])
+    timestamp = encrypted.get("ts")
+    return int(timestamp) if isinstance(timestamp, (int, float)) else None
+  except Exception:
+    return None
 
 
 def backoff(retries: int) -> int:
