@@ -1,4 +1,5 @@
 import configparser
+import glob
 import json
 import os
 import socket
@@ -30,12 +31,58 @@ def affine_irq(val, action):
   for i in irqs:
     sudo_write(str(val), f"/proc/irq/{i}/smp_affinity_list")
 
+def sudo_write_if_exists(val: str, path: str) -> None:
+  if os.path.exists(path):
+    sudo_write(val, path)
+
+def set_dragon_gpu_power_save(powersave_enabled: bool) -> None:
+  power_control = "/sys/devices/platform/soc@0/3d00000.gpu/power/control"
+  if powersave_enabled:
+    sudo_write("auto", power_control)
+  else:
+    sudo_write("on", power_control)
+    sudo_write("userspace", "/sys/class/devfreq/3d00000.gpu/governor")
+    sudo_write("812000000", "/sys/class/devfreq/3d00000.gpu/userspace/set_freq")
+
+def raise_thermal_limits() -> None:
+  trip_overrides = {
+    90000: 100000,
+    95000: 105000,
+    100000: 108000,
+    105000: 109000,
+  }
+
+  for z in glob.glob("/sys/class/thermal/thermal_zone*/"):
+    try:
+      ztype = open(z + "type").read().strip()
+    except OSError:
+      continue
+
+    if not any(ztype.startswith(p) for p in ("cpu", "aoss", "ddr", "video", "cpuss", "gpuss")):
+      continue
+
+    for i in range(4):
+      tp_path = z + f"trip_point_{i}_temp"
+      tt_path = z + f"trip_point_{i}_type"
+      try:
+        temp = int(open(tp_path).read().strip())
+        trip_type = open(tt_path).read().strip()
+      except (OSError, ValueError):
+        continue
+
+      if trip_type in ("passive", "hot") and temp in trip_overrides:
+        sudo_write(str(trip_overrides[temp]), tp_path)
+
 @lru_cache
 def get_device_type():
   # lru_cache and cache can cause memory leaks when used in classes
+  if (device_type := os.environ.get("DEVICE_TYPE")):
+    return device_type
   with open("/sys/firmware/devicetree/base/model") as f:
     model = f.read().strip('\x00')
-  return model.split('comma ')[-1]
+  if model.startswith(("comma ", "asius ")):
+    return model[6:]
+  return model
 
 def wpa_supplicant_cmd(cmd: str, timeout: float = 0.2) -> dict[str, str]:
   with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
@@ -70,7 +117,7 @@ class HardwareComma(HardwareBase):
 
   @cached_property
   def amplifier(self):
-    if self.get_device_type() == "mici":
+    if self.get_device_type() in ("mici", "v1"):
       return None
     return Amplifier()
 
@@ -97,6 +144,10 @@ class HardwareComma(HardwareBase):
     self.reboot()
 
   def get_serial(self):
+    if self.get_device_type() == "v1":
+      with open("/sys/devices/soc0/serial_number") as f:
+        return f.read().strip()
+
     return self.get_cmdline()['androidboot.serialno']
 
   def get_voltage(self):
@@ -254,8 +305,15 @@ class HardwareComma(HardwareBase):
     subprocess.run("sudo poweroff", shell=True)
 
   def get_thermal_config(self):
+    device_type = self.get_device_type()
+    if device_type == "v1":
+      return ThermalConfig(cpu=[ThermalZone(f"cpu{i}-thermal") for i in range(8)],
+                           gpu=[ThermalZone("gpuss0-thermal"), ThermalZone("gpuss1-thermal")],
+                           dsp=ThermalZone("nspss0-thermal"),
+                           memory=ThermalZone("ddr-thermal"))
+
     intake, exhaust, gnss, bottomSoc = None, None, None, None
-    if self.get_device_type() == "mici":
+    if device_type == "mici":
       gnss = ThermalZone("gnss")
       intake = ThermalZone("intake")
       exhaust = ThermalZone("exhaust")
@@ -300,6 +358,9 @@ class HardwareComma(HardwareBase):
       return 0
 
   def set_power_save(self, powersave_enabled):
+    if self.get_device_type() == "v1":
+      set_dragon_gpu_power_save(powersave_enabled)
+
     # amplifier, 100mW at idle
     if self.amplifier is not None:
       self.amplifier.set_global_shutdown(amp_disabled=powersave_enabled)
@@ -317,7 +378,7 @@ class HardwareComma(HardwareBase):
       if powersave_enabled and n == '4':
         continue
       gov = 'ondemand' if powersave_enabled else 'performance'
-      sudo_write(gov, f'/sys/devices/system/cpu/cpufreq/policy{n}/scaling_governor')
+      sudo_write_if_exists(gov, f'/sys/devices/system/cpu/cpufreq/policy{n}/scaling_governor')
       if not powersave_enabled:
         # cap max core freq to 1689 Mhz
         sudo_write('1689600', f'/sys/devices/system/cpu/cpufreq/policy{n}/scaling_max_freq')
@@ -348,39 +409,45 @@ class HardwareComma(HardwareBase):
     subprocess.run("sudo chmod a+w /dev/kmsg", shell=True)
 
     # Ensure fan gpio is enabled so fan runs until shutdown, also turned on at boot by the ABL
-    gpio_init(GPIO.SOM_ST_IO, True)
-    gpio_set(GPIO.SOM_ST_IO, True)
+    if self.get_device_type() != "v1":
+      gpio_init(GPIO.SOM_ST_IO, True)
+      gpio_set(GPIO.SOM_ST_IO, True)
 
     # *** IRQ config ***
 
     # mask off big cluster from default affinity
-    sudo_write("f", "/proc/irq/default_smp_affinity")
+    sudo_write_if_exists("f", "/proc/irq/default_smp_affinity")
 
     # move these off the default core
     affine_irq(1, "msm_vidc")  # encoders
     affine_irq(1, "i2c_geni")  # sensors
-
-    # *** GPU config ***
-    # https://github.com/commaai/agnos-kernel-sdm845/blob/master/arch/arm64/boot/dts/qcom/sdm845-gpu.dtsi#L216
     affine_irq(5, "fts_ts")    # touch
     affine_irq(5, "msm_drm")   # display
-    sudo_write("1", "/sys/class/kgsl/kgsl-3d0/min_pwrlevel")
-    sudo_write("1", "/sys/class/kgsl/kgsl-3d0/max_pwrlevel")
-    sudo_write("1", "/sys/class/kgsl/kgsl-3d0/force_bus_on")
-    sudo_write("1", "/sys/class/kgsl/kgsl-3d0/force_clk_on")
-    sudo_write("1", "/sys/class/kgsl/kgsl-3d0/force_rail_on")
-    sudo_write("1000", "/sys/class/kgsl/kgsl-3d0/idle_timer")
-    sudo_write("performance", "/sys/class/kgsl/kgsl-3d0/devfreq/governor")
-    sudo_write("710", "/sys/class/kgsl/kgsl-3d0/max_clock_mhz")
 
-    # setup governors
-    sudo_write("performance", "/sys/class/devfreq/soc:qcom,cpubw/governor")
-    sudo_write("performance", "/sys/class/devfreq/soc:qcom,memlat-cpu0/governor")
-    sudo_write("performance", "/sys/class/devfreq/soc:qcom,memlat-cpu4/governor")
+    # *** GPU config ***
+    if self.get_device_type() == "v1":
+      sudo_write("userspace", "/sys/class/devfreq/3d00000.gpu/governor")
+      sudo_write("812000000", "/sys/class/devfreq/3d00000.gpu/userspace/set_freq")
+      raise_thermal_limits()
+    else:
+      # https://github.com/commaai/agnos-kernel-sdm845/blob/master/arch/arm64/boot/dts/qcom/sdm845-gpu.dtsi#L216
+      sudo_write("1", "/sys/class/kgsl/kgsl-3d0/min_pwrlevel")
+      sudo_write("1", "/sys/class/kgsl/kgsl-3d0/max_pwrlevel")
+      sudo_write("1", "/sys/class/kgsl/kgsl-3d0/force_bus_on")
+      sudo_write("1", "/sys/class/kgsl/kgsl-3d0/force_clk_on")
+      sudo_write("1", "/sys/class/kgsl/kgsl-3d0/force_rail_on")
+      sudo_write("1000", "/sys/class/kgsl/kgsl-3d0/idle_timer")
+      sudo_write("performance", "/sys/class/kgsl/kgsl-3d0/devfreq/governor")
+      sudo_write("710", "/sys/class/kgsl/kgsl-3d0/max_clock_mhz")
 
-    # *** VIDC (encoder) config ***
-    sudo_write("N", "/sys/kernel/debug/msm_vidc/clock_scaling")
-    sudo_write("Y", "/sys/kernel/debug/msm_vidc/disable_thermal_mitigation")
+      # setup governors
+      sudo_write("performance", "/sys/class/devfreq/soc:qcom,cpubw/governor")
+      sudo_write("performance", "/sys/class/devfreq/soc:qcom,memlat-cpu0/governor")
+      sudo_write("performance", "/sys/class/devfreq/soc:qcom,memlat-cpu4/governor")
+
+      # *** VIDC (encoder) config ***
+      sudo_write("N", "/sys/kernel/debug/msm_vidc/clock_scaling")
+      sudo_write("Y", "/sys/kernel/debug/msm_vidc/disable_thermal_mitigation")
 
     # pandad core
     affine_irq(3, "spi_geni")         # SPI

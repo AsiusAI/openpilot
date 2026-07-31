@@ -10,6 +10,7 @@ import queue
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 
+import pytest
 from websocket import ABNF
 from websocket._exceptions import WebSocketConnectionClosedException
 
@@ -140,6 +141,25 @@ class TestAthenadMethods(OpenpilotTestCase):
     finally:
       end_event.set()
       p.join()
+
+  def test_start_stream_without_car_params_on_asius(self, mocker):
+    self.params.remove("CarParamsPersistent")
+    self.params.put_bool("IsOffroad", False)
+    mocker.patch.object(athenad, "ASIUS", True)
+    post_stream_request = mocker.patch(
+      "openpilot.system.webrtc.helpers.post_stream_request",
+      return_value={"sdp": "answer", "type": "answer"},
+    )
+
+    assert dispatcher["startStream"]("offer", True) == {"sdp": "answer", "type": "answer"}
+    assert post_stream_request.call_args.args[0].bridge_services_in == []
+
+  def test_start_stream_without_car_params_on_comma(self, mocker):
+    self.params.remove("CarParamsPersistent")
+    mocker.patch.object(athenad, "ASIUS", False)
+
+    with pytest.raises(Exception, match="failed to get CarParamsPersistent"):
+      dispatcher["startStream"]("offer", True)
 
   def test_list_data_directory(self):
     route = '2021-03-29--13-32-47'

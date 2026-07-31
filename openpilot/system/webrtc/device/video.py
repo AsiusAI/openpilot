@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+import re
 import struct
 import time
 
@@ -19,6 +20,11 @@ TIMING_SEI_UUID = bytes([
   0x9c, 0x7e, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc,
 ])
 _SEI_PREFIX = b'\x00\x00\x00\x01\x06\x05\x30' + TIMING_SEI_UUID
+_SHORT_ANNEX_B_START_CODE = re.compile(br'(?<!\x00)\x00\x00\x01')
+
+
+def _normalize_h264_start_codes(data: bytes) -> bytes:
+  return _SHORT_ANNEX_B_START_CODE.sub(b'\x00\x00\x00\x01', data)
 
 
 @dataclass(frozen=True)
@@ -56,7 +62,9 @@ class LiveStreamVideoStreamTrack(TiciVideoStreamTrack):
     return messaging.sub_sock(self.camera_to_sock_mapping[camera_type], conflate=True)
 
   def switch_camera(self, camera_type: str) -> None:
+    self._seen_keyframe = False
     self._sock = self._make_sock(camera_type)
+    self.request_keyframe()
 
   def enable(self, enabled: bool):
     self.video_enabled = enabled
@@ -69,7 +77,7 @@ class LiveStreamVideoStreamTrack(TiciVideoStreamTrack):
   def _build_frame_data(self, msg) -> bytes:
     encode_data = getattr(msg, msg.which())
     if not self.timing_sei_enabled:
-      return encode_data.header + encode_data.data
+      return _normalize_h264_start_codes(encode_data.header + encode_data.data)
 
     idx = encode_data.idx
     sei_nal = _SEI_PREFIX + struct.pack('>4d',
@@ -78,7 +86,7 @@ class LiveStreamVideoStreamTrack(TiciVideoStreamTrack):
       (time.monotonic_ns() - msg.logMonoTime) / 1e6,
       time.time() * 1000,  # noqa: TID251
     ) + b'\x80'
-    return encode_data.header + sei_nal + encode_data.data
+    return _normalize_h264_start_codes(encode_data.header + sei_nal + encode_data.data)
 
   async def recv(self):
     while True:
@@ -89,7 +97,10 @@ class LiveStreamVideoStreamTrack(TiciVideoStreamTrack):
 
       msg = messaging.recv_one_or_none(self._sock)
       if msg is not None:
-        if not self._seen_keyframe and (getattr(msg, msg.which()).idx.flags & V4L2_BUF_FLAG_KEYFRAME):
+        is_keyframe = bool(getattr(msg, msg.which()).idx.flags & V4L2_BUF_FLAG_KEYFRAME)
+        if not self._seen_keyframe and not is_keyframe:
+          continue
+        if not self._seen_keyframe:
           self._seen_keyframe = True
           self.params.put("LivestreamRequestKeyframe", False, block=False)
         break

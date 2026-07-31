@@ -3,8 +3,8 @@
 import numpy as np
 
 import openpilot.cereal.messaging as messaging
-from openpilot.cereal.visionipc import VisionStreamType
-from msgq.visionipc import VisionIpcClient
+from msgq.visionipc import VisionIpcClient, VisionStreamType
+from openpilot.common.hardware import ASIUS
 from openpilot.common.realtime import DT_MDL
 
 
@@ -19,16 +19,25 @@ def yuv_to_rgb(y, u, v):
   ul = np.repeat(np.repeat(u, 2).reshape(u.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
   vl = np.repeat(np.repeat(v, 2).reshape(v.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
 
-  yuv = np.dstack((y, ul, vl)).astype(np.int16)
-  yuv[:, :, 1:] -= 128
-
-  m = np.array([
-    [1.00000,  1.00000, 1.00000],
-    [0.00000, -0.39465, 2.03211],
-    [1.13983, -0.58060, 0.00000],
-  ])
-  rgb = np.dot(yuv, m).clip(0, 255)
-  return rgb.astype(np.uint8)
+  if ASIUS:
+    y_full = (y.astype(np.float32) - 16.0) * (255.0 / 219.0)
+    u_full = (ul.astype(np.float32) - 128.0) * (255.0 / 224.0)
+    v_full = (vl.astype(np.float32) - 128.0) * (255.0 / 224.0)
+    rgb = np.dstack((
+      y_full + 1.13983 * v_full,
+      y_full - 0.39465 * u_full - 0.58060 * v_full,
+      y_full + 2.03211 * u_full,
+    ))
+  else:
+    yuv = np.dstack((y, ul, vl)).astype(np.int16)
+    yuv[:, :, 1:] -= 128
+    m = np.array([
+      [1.00000,  1.00000, 1.00000],
+      [0.00000, -0.39465, 2.03211],
+      [1.13983, -0.58060, 0.00000],
+    ])
+    rgb = np.dot(yuv, m)
+  return np.clip(rgb, 0, 255).astype(np.uint8)
 
 
 def extract_image(buf):

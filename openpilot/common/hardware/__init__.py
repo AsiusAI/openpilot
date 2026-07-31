@@ -12,7 +12,7 @@ ASIUS_HARDWARE = ASIUS
 PC = not (COMMA_HARDWARE or ASIUS_HARDWARE)
 
 
-if COMMA_HARDWARE:
+if COMMA_HARDWARE or ASIUS_HARDWARE:
   HARDWARE = cast(HardwareBase, HardwareComma())
 else:
   HARDWARE = cast(HardwareBase, HardwarePc())

@@ -7,8 +7,8 @@ from openpilot.common.test import OpenpilotTestCase
 from openpilot.cereal import messaging, log
 from teleoprtc.tracks import VIDEO_CLOCK_RATE
 
-from openpilot.system.webrtc.webrtcd import CerealOutgoingMessageProxy, CerealIncomingMessageProxy, ServerState, handle_get_stream
-from openpilot.system.webrtc.device.video import LiveStreamVideoStreamTrack
+from openpilot.system.webrtc.webrtcd import CerealOutgoingMessageProxy, CerealIncomingMessageProxy
+from openpilot.system.webrtc.device.video import V4L2_BUF_FLAG_KEYFRAME, LiveStreamVideoStreamTrack, _normalize_h264_start_codes
 
 
 class TestStreamSession(OpenpilotTestCase):
@@ -65,7 +65,8 @@ class TestStreamSession(OpenpilotTestCase):
       mocked_pubmaster.reset_mock()
 
   def test_livestream_track(self, mocker):
-    fake_msg = messaging.new_message("livestreamCabinEncodeData")
+    fake_msg = messaging.new_message("livestreamDriverEncodeData")
+    fake_msg.livestreamDriverEncodeData.idx.flags = V4L2_BUF_FLAG_KEYFRAME
 
     config = {"receive.return_value": fake_msg.to_bytes()}
     mocker.patch("msgq.SubSocket", spec=True, **config)
@@ -81,7 +82,35 @@ class TestStreamSession(OpenpilotTestCase):
       assert abs(i + packet.pts - (start_pts + (((time.monotonic_ns() - start_ns) * VIDEO_CLOCK_RATE) // 1_000_000_000))) < 450 #5ms
       assert bytes(packet) == b""
 
-  def test_stream_rejects_non_json_content_type(self):
-    response = self.loop.run_until_complete(handle_get_stream(ServerState(), b"{}", "text/plain"))
+  def test_livestream_normalizes_mixed_h264_start_codes(self):
+    data = b"\x00\x00\x01\x67sps\x00\x00\x00\x01\x68pps\xff\x00\x00\x01\x65idr"
+    expected = b"\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x68pps\xff\x00\x00\x00\x01\x65idr"
 
-    assert response == (415, b'{"error": "unsupported media type"}', "application/json; charset=utf-8")
+    assert _normalize_h264_start_codes(data) == expected
+
+  def test_livestream_track_camera_switch_requests_keyframe(self, mocker):
+    mocker.patch("msgq.SubSocket", spec=True)
+    track = LiveStreamVideoStreamTrack("wideRoad")
+    track._seen_keyframe = True
+    request_keyframe = mocker.patch.object(track, "request_keyframe")
+
+    track.switch_camera("driver")
+
+    assert not track._seen_keyframe
+    request_keyframe.assert_called_once()
+
+  def test_livestream_track_waits_for_keyframe(self, mocker):
+    delta = messaging.new_message("livestreamDriverEncodeData")
+    delta.livestreamDriverEncodeData.data = b"delta"
+    keyframe = messaging.new_message("livestreamDriverEncodeData")
+    keyframe.livestreamDriverEncodeData.idx.flags = V4L2_BUF_FLAG_KEYFRAME
+    keyframe.livestreamDriverEncodeData.data = b"keyframe"
+    sock = mocker.Mock()
+    sock.receive.side_effect = [delta.to_bytes(), keyframe.to_bytes()]
+    mocker.patch("msgq.SubSocket", return_value=sock)
+
+    track = LiveStreamVideoStreamTrack("driver")
+    packet = self.loop.run_until_complete(track.recv())
+
+    assert bytes(packet) == b"keyframe"
+    assert sock.receive.call_count == 2

@@ -1,0 +1,28 @@
+{
+  "manifest_version": 1,
+  "minimum_updater_version": 1,
+  "partitions": [
+    {
+      "compressed_sha256": "ca98a84cbbdfe2e1b1891724bd95dc278c81c3df5e9e9816c2b6c68f7b67eaca",
+      "compressed_size": 28736320,
+      "compression": "xz",
+      "hash": "450f02006df8d47b9621d637a5b8582d5410f978bfb1ee34bb8ca255c028b117",
+      "name": "esp",
+      "sha256": "450f02006df8d47b9621d637a5b8582d5410f978bfb1ee34bb8ca255c028b117",
+      "size": 268435456,
+      "url": "https://updates.asius.ai/vamos/objects/esp-450f02006df8d47b9621d637a5b8582d5410f978bfb1ee34bb8ca255c028b117.img.xz"
+    },
+    {
+      "compressed_sha256": "614d8c74e039af42bb956cc28d73afe90ad24356cb6acde77121b2fa7e5cf6d2",
+      "compressed_size": 971282816,
+      "compression": "xz",
+      "hash": "3a62ec99a45eaa13d23501a8558721bb081dab8f12be8b037973f9ac13d8eb20",
+      "name": "system",
+      "sha256": "3a62ec99a45eaa13d23501a8558721bb081dab8f12be8b037973f9ac13d8eb20",
+      "size": 10737418240,
+      "url": "https://updates.asius.ai/vamos/objects/system-3a62ec99a45eaa13d23501a8558721bb081dab8f12be8b037973f9ac13d8eb20.img.xz"
+    }
+  ],
+  "product": "radxa-dragon-q6a",
+  "version": "18.1"
+}

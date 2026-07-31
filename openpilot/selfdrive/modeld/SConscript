@@ -13,6 +13,14 @@ from openpilot.selfdrive.modeld.helpers import TG_INPUT_DEVICES_PATH, chestnut_p
 Import('env', 'arch')
 chunker_file = File("#openpilot/common/file_chunker.py")
 lenv = env.Clone()
+asius = os.path.isfile("/ASIUS")
+asius_compile_env = f"LD_LIBRARY_PATH={os.environ['LD_LIBRARY_PATH']} " if asius else ""
+asius_gpu_lock = File("models/.asius_gpu_compile.lock").abspath
+
+def serialize_asius_gpu(node):
+  if asius:
+    lenv.SideEffect(asius_gpu_lock, node)
+  return node
 
 tinygrad_root = env.Dir("#").abspath
 tinygrad_files = ["#"+x for x in glob.glob(env.Dir("#tinygrad_repo").relpath + "/**", recursive=True, root_dir=tinygrad_root)
@@ -23,10 +31,10 @@ def estimate_pickle_max_size(onnx_size):
   # the ONNX size. Overestimating only adds an empty trailing chunk.
   return 2.0 * onnx_size + 10 * 1024 * 1024
 
-if arch == 'comma_arm64':
-  from openpilot.common.hardware import HARDWARE
-  camera = _os_fisheye if HARDWARE.get_device_type() == "mici" else _ar_ox_fisheye
-  camera_configs = [(camera.width, camera.height)]
+if asius:
+  tg_backend = 'CL'
+  tg_flags = f'{asius_compile_env}DEV=CL MODEL_DIRECT_IMAGES=1 FLOAT16=1 JIT_BATCH_SIZE=0 OPENPILOT_HACKS=1'
+elif arch == 'comma_arm64':
   tg_backend = 'QCOM'
   tg_flags = f'DEV={tg_backend} IMAGE=1 FLOAT16=1 NOLOCALS=1 JIT_BATCH_SIZE=0 OPENPILOT_HACKS=1'
 else:
@@ -61,8 +69,9 @@ tg_devices_node = lenv.Command(
 mac_brew_string = f'HOME={os.path.expanduser("~")}' if arch == 'Darwin' else ''
 
 modeld_dir = Dir("#openpilot/selfdrive/modeld").abspath
+compile_modeld_filename = "compile_modeld_v1.py" if asius else "compile_modeld.py"
 compile_modeld_script = [
-  File(f"{modeld_dir}/compile_modeld.py"),
+  File(f"{modeld_dir}/{compile_modeld_filename}"),
   File(f"{modeld_dir}/get_model_metadata.py"),
   File("#openpilot/system/camerad/cameras/nv12_info.py"),
   File("#openpilot/common/hardware/hw.py"),
@@ -74,10 +83,8 @@ for chestnut in [False, True] if CHESTNUT else [False]:
   target_pkl_path = File(modeld_pkl_path(chestnut)).abspath
   file_prefix, cmd_flags = ('big_', chestnut_tg_flags) if chestnut else ('', tg_flags)
   driving_onnx_deps = get_existing_chunks(File(f"models/{file_prefix}driving_supercombo.onnx").abspath)
-  camera_res_args = ' '.join(f'{cw}x{ch}' for cw, ch in camera_configs)
-  # CPU 7 is isolated with isolcpus on AGNOS, so explicitly pin the compiler to it.
-  taskset = 'taskset -c 7 ' if arch == 'comma_arm64' else ''
-  cmd = (f'{cmd_flags} {mac_brew_string} {taskset}python3 {modeld_dir}/compile_modeld.py '
+  camera_res_args = ' '.join(f'{cw}x{ch}' for cw, ch in CAMERA_CONFIGS)
+  cmd = (f'{cmd_flags} {mac_brew_string} python3 {modeld_dir}/{compile_modeld_filename} '
         f'--model-size {model_w}x{model_h} '
         f'--camera-resolutions {camera_res_args} '
         f'--onnx {File(f"models/{file_prefix}driving_supercombo.onnx").abspath} '
@@ -99,20 +106,20 @@ for chestnut in [False, True] if CHESTNUT else [False]:
     chunk_file(pkl, chunks)
   def do_chunk(target, source, env, pkl=target_pkl_path, chunks=chunk_targets):
     chunk_file(pkl, chunks)
-  actions = Action(do_compile, "  [CHESTNUT] $TARGET") if chestnut else [cmd, Action(do_chunk, "  [CHUNK] $TARGET")]
-  node = lenv.Command(
+  actions = Action(do_compile, "  [USBGPU] $TARGET") if usbgpu else [cmd, Action(do_chunk, "  [CHUNK] $TARGET")]
+  node = serialize_asius_gpu(lenv.Command(
     chunk_targets,
     tinygrad_files + compile_modeld_script + driving_onnx_deps + [Value(camera_res_args), Value(chunk_targets), chunker_file],
     actions,
-  )
-  if chestnut:
-    lenv.SideEffect(chestnut_lock, node)
+  ))
+  if usbgpu:
+    lenv.SideEffect(usbgpu_lock, node)
 
 # get model metadata
 fn = File(f"models/dmonitoring_model").abspath
 script_files = [File(Dir("#openpilot/selfdrive/modeld").File("get_model_metadata.py").abspath)]
 cmd = f'{tg_flags} {mac_brew_string} python3 {Dir("#openpilot/selfdrive/modeld").abspath}/get_model_metadata.py {fn}.onnx'
-lenv.Command(fn + "_metadata.pkl", [fn + ".onnx"] + tinygrad_files + script_files + [tg_devices_node], cmd)
+serialize_asius_gpu(lenv.Command(fn + "_metadata.pkl", [fn + ".onnx"] + tinygrad_files + script_files + [tg_devices_node], cmd))
 
 dm_w, dm_h = DM_INPUT_SIZE
 compile_dm_warp_script = [File(f"{modeld_dir}/compile_dm_warp.py")]
@@ -121,7 +128,7 @@ for cam_w, cam_h in camera_configs:
   cmd = (f'{tg_flags} {mac_brew_string} python3 {modeld_dir}/compile_dm_warp.py '
          f'--camera-resolution {cam_w}x{cam_h} --warp-to {dm_w}x{dm_h} '
          f'--output {dm_pkl_path}')
-  lenv.Command(dm_pkl_path, tinygrad_files + compile_dm_warp_script + compile_modeld_script + [tg_devices_node], cmd)
+  serialize_asius_gpu(lenv.Command(dm_pkl_path, tinygrad_files + compile_dm_warp_script + compile_modeld_script + [tg_devices_node], cmd))
 
 def tg_compile(flags, model_name):
   pythonpath_string = 'PYTHONPATH="${PYTHONPATH}:' + env.Dir("#tinygrad_repo").abspath + '"'
@@ -138,4 +145,4 @@ def tg_compile(flags, model_name):
      Action(do_chunk, "  [CHUNK] $TARGET")],
   )
 
-tg_compile(tg_flags, 'dmonitoring_model')
+serialize_asius_gpu(tg_compile(tg_flags, 'dmonitoring_model'))

@@ -15,6 +15,11 @@
 #include "system/loggerd/logger.h"
 
 constexpr int MAIN_FPS = 20;
+#ifdef __ASIUS_HARDWARE__
+constexpr int STREAM_FPS = MAIN_FPS;
+constexpr int STREAM_WIDTH = 1344;
+constexpr int STREAM_HEIGHT = 760;
+#endif
 const auto MAIN_ENCODE_TYPE = Hardware::PC() ? cereal::EncodeIndex::Type::BIG_BOX_LOSSLESS : cereal::EncodeIndex::Type::FULL_H_E_V_C;
 #define NO_CAMERA_PATIENCE 500  // fall back to time-based rotation if all cameras are dead
 
@@ -65,7 +70,11 @@ struct EncoderSettings {
 
   static EncoderSettings StreamEncoderSettings() {
     int _stream_bitrate = getenv("STREAM_BITRATE") ? atoi(getenv("STREAM_BITRATE")) : 5'000'000;
+#ifdef __ASIUS_HARDWARE__
+    return EncoderSettings{.encode_type = cereal::EncodeIndex::Type::QCAMERA_H264, .bitrate = _stream_bitrate , .gop_size = STREAM_FPS};
+#else
     return EncoderSettings{.encode_type = cereal::EncodeIndex::Type::QCAMERA_H264, .bitrate = _stream_bitrate , .gop_size = 5};
+#endif
   }
 };
 
@@ -123,8 +132,14 @@ const EncoderInfo stream_road_encoder_info = {
   //.thumbnail_name = "thumbnail",
   .record = false,
   .is_live = true,
+#ifdef __ASIUS_HARDWARE__
+  .frame_width = STREAM_WIDTH,
+  .frame_height = STREAM_HEIGHT,
+  .fps = STREAM_FPS,
+#else
   .frame_width = livestream_width(),
   .frame_height = livestream_height(),
+#endif
   .get_settings = [](int){return EncoderSettings::StreamEncoderSettings();},
   INIT_ENCODE_FUNCTIONS(LivestreamNarrowRoadEncode),
 };
@@ -133,8 +148,14 @@ const EncoderInfo stream_wide_road_encoder_info = {
   .publish_name = "livestreamWideRoadEncodeData",
   .record = false,
   .is_live = true,
+#ifdef __ASIUS_HARDWARE__
+  .frame_width = STREAM_WIDTH,
+  .frame_height = STREAM_HEIGHT,
+  .fps = STREAM_FPS,
+#else
   .frame_width = livestream_width(),
   .frame_height = livestream_height(),
+#endif
   .get_settings = [](int){return EncoderSettings::StreamEncoderSettings();},
   INIT_ENCODE_FUNCTIONS(LivestreamWideRoadEncode),
 };
@@ -143,8 +164,14 @@ const EncoderInfo stream_cabin_encoder_info = {
   .publish_name = "livestreamCabinEncodeData",
   .record = false,
   .is_live = true,
+#ifdef __ASIUS_HARDWARE__
+  .frame_width = STREAM_WIDTH,
+  .frame_height = STREAM_HEIGHT,
+  .fps = STREAM_FPS,
+#else
   .frame_width = livestream_width(),
   .frame_height = livestream_height(),
+#endif
   .get_settings = [](int){return EncoderSettings::StreamEncoderSettings();},
   INIT_ENCODE_FUNCTIONS(LivestreamCabinEncode),
 };
@@ -178,21 +205,30 @@ const LogCameraInfo cabin_camera_info{
 };
 
 const LogCameraInfo stream_road_camera_info{
-  .thread_name = "narrow_road_cam_encoder",
-  .stream_type = VISION_STREAM_NARROW_ROAD,
+  .thread_name = "road_cam_encoder",
+#ifdef __ASIUS_HARDWARE__
+  .fps = STREAM_FPS,
+#endif
+  .stream_type = VISION_STREAM_ROAD,
   .encoder_infos = {stream_road_encoder_info},
 };
 
 const LogCameraInfo stream_wide_road_camera_info{
   .thread_name = "wide_road_cam_encoder",
+#ifdef __ASIUS_HARDWARE__
+  .fps = STREAM_FPS,
+#endif
   .stream_type = VISION_STREAM_WIDE_ROAD,
   .encoder_infos = {stream_wide_road_encoder_info},
 };
 
-const LogCameraInfo stream_cabin_camera_info{
-  .thread_name = "cabin_cam_encoder",
-  .stream_type = VISION_STREAM_CABIN,
-  .encoder_infos = {stream_cabin_encoder_info},
+const LogCameraInfo stream_driver_camera_info{
+  .thread_name = "driver_cam_encoder",
+#ifdef __ASIUS_HARDWARE__
+  .fps = STREAM_FPS,
+#endif
+  .stream_type = VISION_STREAM_DRIVER,
+  .encoder_infos = {stream_driver_encoder_info},
 };
 
 const LogCameraInfo cameras_logged[] = {narrow_road_camera_info, wide_road_camera_info, cabin_camera_info};

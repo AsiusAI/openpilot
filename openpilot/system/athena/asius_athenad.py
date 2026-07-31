@@ -17,8 +17,9 @@ import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from functools import partial, total_ordering
+from pathlib import Path
 from queue import Queue
-from typing import Any, cast
+from typing import Any, Protocol, cast
 from collections.abc import Callable
 
 import requests
@@ -52,6 +53,10 @@ from openpilot.system.athena.websocketd import (
 )
 
 
+class ParamsReader(Protocol):
+  def get(self, key: str) -> Any: ...
+
+
 def main(exit_event: threading.Event | None = None) -> None:
   from openpilot.system.athena.websocketd import main as websocket_main
   websocket_main(exit_event)
@@ -69,6 +74,7 @@ WS_FRAME_SIZE = 4096
 DEVICE_STATE_UPDATE_INTERVAL = 1.0  # in seconds
 DEFAULT_UPLOAD_PRIORITY = 99  # higher number = lower priority
 LIVE_STATE_INTERVAL_S = 1.0
+VAMOS_UPDATE_STATE_FILE = Path("/data/vamos-update/state.json")
 SAVE_PARAMS_BLOCKED_KEYS = {
   "AccessToken",
   "ApiCache_Device",
@@ -87,7 +93,10 @@ SAVE_PARAMS_BLOCKED_KEYS = {
 }
 LIVE_STATE_SERVICES = [
   "deviceState",
+  "liveCalibration",
   "managerState",
+  "onroadEvents",
+  "selfdriveState",
 ]
 LIVE_STATE_PARAM_KEYS = [
   "DongleId",
@@ -113,11 +122,17 @@ LIVE_STATE_PARAM_KEYS = [
   "GsmRoaming",
   "GsmApn",
   "UpdaterState",
+  "UpdaterProgress",
   "UpdateAvailable",
   "UpdateFailedCount",
+  "UpdaterFetchAvailable",
   "UpdaterCurrentDescription",
+  "UpdaterNewDescription",
   "UpdaterTargetBranch",
   "UpdaterAvailableBranches",
+  "UpdaterLastFetchTime",
+  "LastUpdateTime",
+  "LastUpdateException",
 ]
 
 # https://bytesolutions.com/dscp-tos-cos-precedence-conversion-chart,
@@ -709,10 +724,19 @@ def _local_ips() -> list[dict[str, str]]:
 
 def _nmcli(args: list[str], sensitive: bool = False) -> str:
   try:
-    return subprocess.check_output(["nmcli", *args], stderr=subprocess.STDOUT, encoding="utf-8")
+    return subprocess.check_output(["sudo", "-n", "nmcli", *args], stderr=subprocess.STDOUT, encoding="utf-8")
   except subprocess.CalledProcessError as e:
-    output = "" if sensitive else e.output
-    raise Exception(f"nmcli failed: {' '.join(args)} {output}".strip()) from e
+    safe_args = args.copy()
+    secrets = []
+    if sensitive:
+      for index in range(1, len(safe_args)):
+        if safe_args[index - 1] == "password":
+          secrets.append(safe_args[index])
+          safe_args[index] = "<redacted>"
+    output = e.output if not sensitive or secrets else ""
+    for secret in secrets:
+      output = output.replace(secret, "<redacted>")
+    raise Exception(f"nmcli failed: {' '.join(safe_args)} {output}".strip()) from e
 
 
 def _nmcli_fields(line: str) -> list[str]:
@@ -807,7 +831,15 @@ def _tethering_password() -> str:
     return "swagswagcomma"
 
 
-def _software_update_state(params: Params | None = None) -> dict[str, str | bool | int | None]:
+def _read_vamos_update_state() -> dict[str, Any] | None:
+  try:
+    value = json.loads(VAMOS_UPDATE_STATE_FILE.read_text(encoding="utf-8"))
+    return _json_safe(value) if isinstance(value, dict) else None
+  except (FileNotFoundError, json.JSONDecodeError, OSError):
+    return None
+
+
+def _software_update_state(params: ParamsReader | None = None) -> dict[str, Any]:
   params = params or Params()
   keys = [
     "UpdaterCurrentDescription",
@@ -815,6 +847,7 @@ def _software_update_state(params: Params | None = None) -> dict[str, str | bool
     "UpdaterNewDescription",
     "UpdaterNewReleaseNotes",
     "UpdaterState",
+    "UpdaterProgress",
     "UpdaterTargetBranch",
     "UpdaterAvailableBranches",
     "UpdaterLastFetchTime",
@@ -824,12 +857,15 @@ def _software_update_state(params: Params | None = None) -> dict[str, str | bool
     "UpdaterFetchAvailable",
     "UpdateFailedCount",
   ]
-  state: dict[str, str | bool | int | None] = {}
+  state: dict[str, Any] = {}
   for key in keys:
     value = params.get(key)
     if isinstance(value, bytes):
       value = value.decode("utf-8", "replace")
     state[key] = _json_safe(value)
+  vamos_state = _read_vamos_update_state()
+  if vamos_state is not None:
+    state["VamosUpdate"] = vamos_state
   return state
 
 
@@ -863,7 +899,7 @@ def getNetworkState() -> dict:
 
 @dispatcher.add_method
 def refreshNetworks() -> dict:
-  subprocess.run(["nmcli", "device", "wifi", "rescan", "ifname", "wlan0"], check=False)
+  _nmcli(["device", "wifi", "rescan", "ifname", "wlan0"])
   return getNetworkState()
 
 
@@ -884,7 +920,7 @@ def connectNetwork(ssid: str, password: str = "", hidden: bool = False) -> dict[
 @dispatcher.add_method
 def forgetNetwork(ssid: str) -> dict[str, int]:
   for name in (f"openpilot connection {ssid}", ssid):
-    subprocess.run(["nmcli", "connection", "delete", name], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["sudo", "-n", "nmcli", "connection", "delete", name], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
   return {"success": 1}
 
 
@@ -893,7 +929,7 @@ def setTethering(enabled: bool) -> dict[str, int]:
   if enabled:
     _nmcli(["device", "wifi", "hotspot", "ifname", "wlan0", "ssid", _tethering_ssid(), "password", _tethering_password()], sensitive=True)
   else:
-    subprocess.run(["nmcli", "connection", "down", "Hotspot"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["sudo", "-n", "nmcli", "connection", "down", "Hotspot"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
   return {"success": 1}
 
 
@@ -901,7 +937,7 @@ def setTethering(enabled: bool) -> dict[str, int]:
 def setTetheringPassword(password: str) -> dict[str, int | str]:
   if len(password) < 8:
     return {"success": 0, "error": "password must be at least 8 characters"}
-  subprocess.run(["nmcli", "connection", "modify", "Hotspot", "802-11-wireless-security.psk", password], check=False)
+  _nmcli(["connection", "modify", "Hotspot", "802-11-wireless-security.psk", password], sensitive=True)
   return {"success": 1}
 
 
@@ -916,7 +952,7 @@ def setCurrentNetworkMetered(metered: int | str) -> dict[str, int]:
 
 
 @dispatcher.add_method
-def getSoftwareUpdateState() -> dict[str, str | bool | int | None]:
+def getSoftwareUpdateState() -> dict[str, Any]:
   return _software_update_state()
 
 
@@ -991,6 +1027,7 @@ def _live_state_snapshot(sm: messaging.SubMaster, params: Params) -> dict[str, A
       "commit": build_metadata.openpilot.git_commit,
     },
     "params": param_values,
+    "software": _software_update_state(params),
     "services": services,
     "authorizedPeers": list(load_authorized_peers().keys()),
   }

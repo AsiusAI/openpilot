@@ -106,7 +106,7 @@ class BaseCabinCameraDialog(Widget):
 
     AudibleAlert = log.SelfdriveState.AudibleAlert
     ALERT_SOUNDS = {
-      'one': AudibleAlert.preAlert,
+      'v1': AudibleAlert.preAlert,
       'two': AudibleAlert.promptDistracted,
       'three': AudibleAlert.warningImmediate,
     }
