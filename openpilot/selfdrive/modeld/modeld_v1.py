@@ -6,6 +6,7 @@ from typing import cast
 os.environ['GMMU'] = '0' # for usbgpu fast loading, noop for qcom
 from tinygrad.device import Buffer, Device
 from tinygrad.dtype import dtypes
+from tinygrad.runtime.autogen import opencl as cl
 from tinygrad.tensor import Tensor
 import threading
 import time
@@ -26,7 +27,7 @@ from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, should_stop, smooth_value, get_curvature_from_plan
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
-from openpilot.selfdrive.modeld.compile_modeld import make_input_queues, WARP_INPUTS, POLICY_INPUTS
+from openpilot.selfdrive.modeld.compile_modeld_v1 import make_input_queues, WARP_INPUTS, POLICY_INPUTS
 from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_driving_model_data, fill_pose_msg, PublishState
 from openpilot.common.file_chunker import open_file_chunked
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
@@ -121,7 +122,7 @@ class FastCLWarp:
   def __call__(self, frame: Tensor, big_frame: Tensor, transforms: dict[str, np.ndarray]) -> tuple[Tensor, Tensor]:
     self.transforms_np[:] = transforms['img'], transforms['big_img']
     transforms_buffer = self.transforms._buffer()
-    transforms_buffer.allocator._copyin(transforms_buffer._buf, memoryview(self.transforms_np))
+    transforms_buffer.allocator._copyin(transforms_buffer._buf, memoryview(self.transforms_np).cast('B'))
     self.write_slot = (self.write_slot + 1) % self.ring_slots
     buffers = (*self.outputs, *self.rings, frame, big_frame, self.transforms)
     self.program(
@@ -180,6 +181,7 @@ class ModelState:
     self.input_shapes = metadata['input_shapes']
     self.vision_input_names = [k for k in self.input_shapes if 'img' in k]
     self.output_slices = metadata['output_slices']
+    self.model_output: np.ndarray | None = None
 
     self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
 
@@ -263,7 +265,17 @@ class ModelState:
       self.npy['big_tfm'][:,:] = transforms['big_img'][:,:]
       warped = self.warp(**{k: self.input_queues[k] for k in WARP_INPUTS}, frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
       outs, = self.run_policy(**{k: self.input_queues[k] for k in POLICY_INPUTS if k in self.input_queues}, warped=warped)
-    model_output = outs.numpy()[0]
+    if self.fast_cl_warp:
+      if self.model_output is None:
+        self.model_output = np.empty(outs.shape, dtype=np.float32)
+      status = cl.clEnqueueReadBuffer(Device[self.QUEUE_DEV].queue, outs._buffer()._buf, cl.CL_TRUE, 0,
+                                      self.model_output.nbytes, ctypes.c_void_p(self.model_output.ctypes.data), 0, None, None)
+      if status != 0:
+        raise RuntimeError(f"failed to read model output from OpenCL: status={status}")
+      Device[self.QUEUE_DEV].pending_copyin.clear()
+      model_output = self.model_output[0]
+    else:
+      model_output = outs.numpy()[0]
     outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
     self.npy['prev_feat'][:] = model_output[self.output_slices['hidden_state']]
 

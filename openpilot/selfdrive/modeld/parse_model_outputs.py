@@ -3,10 +3,16 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 
 def safe_exp(x, out=None):
   # -11 is around 10**14, more causes float16 overflow
-  return np.exp(np.clip(x, -np.inf, 11), out=out)
+  if out is None:
+    return np.exp(np.minimum(x, 11))
+  np.minimum(x, 11, out=out)
+  return np.exp(out, out=out)
 
 def sigmoid(x):
-  return 1. / (1. + safe_exp(-x))
+  np.negative(x, out=x)
+  safe_exp(x, out=x)
+  np.add(x, 1., out=x)
+  return np.reciprocal(x, out=x)
 
 def softmax(x, axis=-1):
   x -= np.max(x, axis=axis, keepdims=True)
@@ -49,7 +55,8 @@ class Parser:
 
     n_values = (raw.shape[2] - out_N)//2
     pred_mu = raw[:,:,:n_values]
-    pred_std = safe_exp(raw[:,:,n_values: 2*n_values])
+    pred_std = raw[:,:,n_values: 2*n_values]
+    safe_exp(pred_std, out=pred_std)
 
     if in_N > 1:
       weights = np.zeros((raw.shape[0], in_N, out_N), dtype=raw.dtype)

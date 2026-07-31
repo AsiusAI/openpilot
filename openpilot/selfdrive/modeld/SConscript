@@ -33,7 +33,14 @@ def estimate_pickle_max_size(onnx_size):
 
 if asius:
   tg_backend = 'CL'
-  tg_flags = f'{asius_compile_env}DEV=CL MODEL_DIRECT_IMAGES=1 FLOAT16=1 JIT_BATCH_SIZE=0 OPENPILOT_HACKS=1'
+  tg_flags = ' '.join([
+    f'{asius_compile_env}DEV=CL', 'MODEL_DIRECT_IMAGES=1', 'FLOAT16=1',
+    'MODEL_FUSE_LAYERNORM=1', 'MODEL_FUSE_ATTENTION_LAYERNORM=1',
+    'MODEL_FUSE_OUTPUT_HEADS=1', 'MODEL_FUSE_ADJACENT=1',
+    'MODEL_VECTORIZE_QKV_WEIGHTS=1',
+    'MODEL_REQD_WORKGROUP_ATTR_KERNELS=r_16_64_32_4_4_24_3_3',
+    'NOLOCALS=1', 'JIT_BATCH_SIZE=0', 'OPENPILOT_HACKS=1',
+  ])
 elif arch == 'comma_arm64':
   tg_backend = 'QCOM'
   tg_flags = f'DEV={tg_backend} IMAGE=1 FLOAT16=1 NOLOCALS=1 JIT_BATCH_SIZE=0 OPENPILOT_HACKS=1'
