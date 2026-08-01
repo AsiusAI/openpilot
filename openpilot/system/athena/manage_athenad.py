@@ -6,7 +6,7 @@ from multiprocessing import Process
 from openpilot.common.params import Params
 from openpilot.system.manager.process import launcher
 from openpilot.common.swaglog import cloudlog
-from openpilot.common.hardware import HARDWARE
+from openpilot.common.hardware import ASIUS, HARDWARE
 from openpilot.common.version import get_build_metadata
 
 ATHENA_MGR_PID_PARAM = "AthenadPid"
@@ -28,7 +28,8 @@ def main():
   try:
     while 1:
       cloudlog.info("starting athena daemon")
-      proc = Process(name='athenad', target=launcher, args=('openpilot.system.athena.asius_athenad', 'athenad'))
+      module = 'openpilot.system.athena.asius_athenad' if ASIUS else 'openpilot.system.athena.athenad'
+      proc = Process(name='athenad', target=launcher, args=(module, 'athenad'))
       proc.start()
       proc.join()
       cloudlog.event("athenad exited", exitcode=proc.exitcode)
