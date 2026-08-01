@@ -12,7 +12,6 @@ import queue
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 
-import pytest
 from websocket import ABNF
 from websocket._exceptions import WebSocketConnectionClosedException
 
@@ -144,11 +143,11 @@ class TestAthenadMethods(OpenpilotTestCase):
     error = subprocess.CalledProcessError(10, ["nmcli"], output=f"connection failed for {password}")
     mocker.patch("openpilot.system.athena.asius_athenad.subprocess.check_output", side_effect=error)
 
-    with pytest.raises(Exception) as exc_info:
+    with self.assertRaises(Exception) as exc_info:
       athenad._nmcli(["device", "wifi", "connect", "test", "password", password], sensitive=True)
 
-    assert password not in str(exc_info.value)
-    assert "connection failed for <redacted>" in str(exc_info.value)
+    assert password not in str(exc_info.exception)
+    assert "connection failed for <redacted>" in str(exc_info.exception)
 
   def test_get_message(self):
     with self.assertRaises(TimeoutError):
