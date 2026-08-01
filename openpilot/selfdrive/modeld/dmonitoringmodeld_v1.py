@@ -132,6 +132,7 @@ def main():
   calib = np.zeros(model.numpy_inputs['calib'].size, dtype=np.float32)
   model_transform = None
   last_model_output = None
+  iteration = 0
 
   while True:
     buf = vipc_client.recv()
@@ -147,7 +148,8 @@ def main():
       calib[:] = np.array(sm["liveCalibration"].rpyCalib)
 
     road_model_active = sm.alive["modelV2"]
-    run_model = last_model_output is None or not (road_model_active and vipc_client.frame_id % 2)
+    run_model = last_model_output is None or not (road_model_active and iteration % 2)
+    iteration += 1
     if run_model:
       if road_model_active:
         time.sleep(0.01)
