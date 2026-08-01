@@ -46,6 +46,11 @@ jobs:
         timeout-minutes: 30
         run: |
           mkdir -p "$COMMA_CACHE" /data/model_replay_cache
+          ln -sfn msgq_repo/msgq msgq
+          ln -sfn opendbc_repo/opendbc opendbc
+          ln -sfn rednose_repo/rednose rednose
+          ln -sfn teleoprtc_repo/teleoprtc teleoprtc
+          ln -sfn tinygrad_repo/tinygrad tinygrad
           git lfs pull
           git lfs fsck --pointers
           python openpilot/system/manager/build.py
