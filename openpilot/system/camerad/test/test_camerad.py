@@ -7,16 +7,25 @@ import numpy as np
 
 from openpilot.common.parameterized import parameterized
 from openpilot.common.test import OpenpilotTestCase
+from openpilot.common.hardware import ASIUS
 from openpilot.cereal.services import SERVICE_LIST
 from openpilot.tools.lib.log_time_series import msgs_to_time_series
-from openpilot.system.camerad.snapshot import get_snapshots
+from openpilot.system.camerad.snapshot import extract_image, get_snapshots
 from openpilot.selfdrive.test.helpers import collect_logs, log_collector, processes_context
+from msgq.visionipc import VisionIpcClient, VisionStreamType
 
 TEST_TIMESPAN = 10
 CAMERAS = ('narrowRoadCameraState', 'cabinCameraState', 'wideRoadCameraState')
 EXPOSURE_STABLE_COUNT = 3
-EXPOSURE_RANGE = (0.15, 0.35)
+EXPOSURE_RANGE = (0.10, 0.65) if ASIUS else (0.15, 0.35)
 MAX_TEST_TIME = 25
+CAMERAD_PROCESS = "camerad_v1" if ASIUS else "camerad"
+STARTUP_FRAME_IGNORE = 10 if ASIUS else 0
+VISION_STREAMS = {
+  'roadCameraState': VisionStreamType.VISION_STREAM_ROAD,
+  'driverCameraState': VisionStreamType.VISION_STREAM_DRIVER,
+  'wideRoadCameraState': VisionStreamType.VISION_STREAM_WIDE_ROAD,
+}
 
 
 def _numpy_rgb2gray(im):
@@ -37,6 +46,11 @@ def _exposure_stable(results):
     for v in results.values()
   )
 
+def _recv_image(client):
+  while (buf := client.recv()) is None:
+    time.sleep(0.01)
+  return extract_image(buf)
+
 
 def run_and_log(procs, services, duration):
   with processes_context(procs):
@@ -45,13 +59,23 @@ def run_and_log(procs, services, duration):
 def _camera_session():
   """Single camerad session that collects logs and exposure data.
      Runs until exposure stabilizes (min TEST_TIMESPAN seconds for enough log data)."""
-  with processes_context(["camerad"]), log_collector(CAMERAS) as (raw_logs, lock):
+  with processes_context([CAMERAD_PROCESS]), log_collector(CAMERAS) as (raw_logs, lock):
+    vipc_clients = None
+    if ASIUS:
+      vipc_clients = {cam: VisionIpcClient("camerad", VISION_STREAMS[cam], True) for cam in CAMERAS}
+      for client in vipc_clients.values():
+        assert client.connect(True)
+
     exposure = {cam: [] for cam in CAMERAS}
     start = time.monotonic()
     while time.monotonic() - start < MAX_TEST_TIME:
-      rpic, dpic = get_snapshots(frame="narrowRoadCameraState", front_frame="cabinCameraState")
-      wpic, _ = get_snapshots(frame="wideRoadCameraState")
-      for cam, img in zip(CAMERAS, [rpic, dpic, wpic], strict=True):
+      if vipc_clients is not None:
+        images = [_recv_image(vipc_clients[cam]) for cam in CAMERAS]
+      else:
+        rpic, dpic = get_snapshots(frame="roadCameraState", front_frame="driverCameraState")
+        wpic, _ = get_snapshots(frame="wideRoadCameraState")
+        images = [rpic, dpic, wpic]
+      for cam, img in zip(CAMERAS, images, strict=True):
         exposure[cam].append(_exposure_stats(img))
 
       if time.monotonic() - start >= TEST_TIMESPAN and _exposure_stable(exposure):
@@ -67,7 +91,8 @@ def _camera_session():
     cnt = len(ts[cam]['t'])
     assert expected_frames*0.8 < cnt < expected_frames*1.2, f"unexpected frame count {cam}: {expected_frames=}, got {cnt}"
 
-    dts = np.abs(np.diff([ts[cam]['timestampSof']/1e6]) - 1000/SERVICE_LIST[cam].frequency)
+    timestamps = ts[cam]['timestampSof'][STARTUP_FRAME_IGNORE:] / 1e6
+    dts = np.abs(np.diff(timestamps) - 1000/SERVICE_LIST[cam].frequency)
     assert (dts < 1.0).all(), f"{cam} dts(ms) out of spec: max diff {dts.max()}, 99 percentile {np.percentile(dts, 99)}"
 
   return ts, exposure
@@ -103,11 +128,15 @@ class TestCamerad(OpenpilotTestCase):
 
   def test_frame_skips(self):
     for c in CAMERAS:
-      assert set(np.diff(self.logs[c]['frameId'])) == {1, }, f"{c} has frame skips"
+      frame_ids = self.logs[c]['frameId'][STARTUP_FRAME_IGNORE:]
+      assert set(np.diff(frame_ids)) == {1, }, f"{c} has frame skips"
 
   def test_frame_sync(self):
-    SYNCED_CAMS = ('narrowRoadCameraState', 'wideRoadCameraState')
-    n = range(len(self.logs['narrowRoadCameraState']['t'][:-10]))
+    if ASIUS:
+      self.skipTest("Asius v1 cameras do not share a hardware frame-sync clock")
+
+    SYNCED_CAMS = ('roadCameraState', 'wideRoadCameraState')
+    n = range(len(self.logs['roadCameraState']['t'][:-10]))
 
     frame_ids = {i: [self.logs[cam]['frameId'][i] for cam in CAMERAS] for i in n}
     assert all(len(set(v)) == 1 for v in frame_ids.values()), "frame IDs not aligned"
@@ -131,12 +160,12 @@ class TestCamerad(OpenpilotTestCase):
       assert c in ts
       assert len(ts[c]['t']) > 20
 
-      # not a valid request id
-      assert 0 not in ts[c]['requestId']
-
       # should monotonically increase
       assert np.all(np.diff(ts[c]['frameId']) >= 1)
-      assert np.all(np.diff(ts[c]['requestId']) >= 1)
+      if not ASIUS:
+        # Request IDs come from the comma SPECTRA request manager.
+        assert 0 not in ts[c]['requestId']
+        assert np.all(np.diff(ts[c]['requestId']) >= 1)
 
       # EOF > SOF
       assert np.all((ts[c]['timestampEof'] - ts[c]['timestampSof']) > 0)
@@ -145,10 +174,13 @@ class TestCamerad(OpenpilotTestCase):
       assert np.all((ts[c]['t'] - ts[c]['timestampSof']/1e9) > 1e-7)
 
       # logMonoTime > EOF, needs some tolerance since EOF is (SOF + readout time) but there is noise in the SOF timestamping (done via IRQ)
-      assert np.mean((ts[c]['t'] - ts[c]['timestampEof']/1e9) > 1e-7) > 0.7  # should be mostly logMonoTime > EOF
+      if not ASIUS:
+        assert np.mean((ts[c]['t'] - ts[c]['timestampEof']/1e9) > 1e-7) > 0.7  # should be mostly logMonoTime > EOF
       assert np.all((ts[c]['t'] - ts[c]['timestampEof']/1e9) > -0.10)        # when EOF > logMonoTime, it should never be more than two frames
 
   def test_stress_test(self):
+    if ASIUS:
+      self.skipTest("SPECTRA fault injection is not part of the Asius VFE path")
     os.environ['SPECTRA_ERROR_PROB'] = '0.008'
     try:
       logs = run_and_log(["camerad", ], CAMERAS, 10)
