@@ -1,4 +1,4 @@
-Import('env', 'arch', 'messaging', 'common', 'visionipc', 'V1')
+Import('env', 'arch', 'messaging', 'common', 'visionipc', 'DEVICE_TYPE')
 
 libs = [common, messaging, visionipc]
 common_srcs = ['cameras/camera_common.cc']
@@ -8,7 +8,7 @@ v1_srcs = ['cameras/camera_v1.cc', 'cameras/cdm_v1.cc', 'sensors/os04c10_v1.cc',
             '#openpilot/system/hardware/asius/visionbuf_dma.cc'] + common_srcs
 
 if arch != "Darwin":
-  if V1:
+  if DEVICE_TYPE == "v1":
     camera_obj = env.Object(v1_srcs)
     env.Program('camerad', ['main.cc', camera_obj], LIBS=libs)
   else:

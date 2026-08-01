@@ -8,6 +8,12 @@ from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 
+VAMOS_UPDATE = Path("/usr/bin/vamos-update")
+
+
+def vamos_update_supported() -> bool:
+  return VAMOS_UPDATE.is_file()
+
 
 def run_vamos_update(cmd: list[str]) -> str:
   params = Params()
@@ -71,6 +77,5 @@ def activate_vamos_update() -> None:
     set_offroad_alert("Offroad_NeosUpdate", False)
 
 
-def should_skip_noop_vamos_fetch(is_vamos: bool, update_available: bool,
-                                 user_request: int, fetch_request: int) -> bool:
-  return is_vamos and not update_available and user_request != fetch_request
+def should_skip_noop_vamos_fetch(update_available: bool, user_request: int, fetch_request: int) -> bool:
+  return vamos_update_supported() and not update_available and user_request != fetch_request

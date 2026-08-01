@@ -48,7 +48,7 @@ from openpilot.common.hardware.hw import Paths
 from openpilot.system.athena.rpc import dispatcher, dumps_call, handle, is_call, is_response, loads
 
 
-ATHENA_HOST = Params().get("AthenaHost", return_default=True)
+ATHENA_HOST = os.getenv('ATHENA_HOST', 'wss://athena.comma.ai')
 HANDLER_THREADS = int(os.getenv('HANDLER_THREADS', "4"))
 LOCAL_PORT_WHITELIST = {22, }  # SSH
 
