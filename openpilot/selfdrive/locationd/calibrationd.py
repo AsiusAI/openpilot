@@ -14,7 +14,7 @@ from typing import NoReturn
 from openpilot.cereal import log
 from opendbc.car.structs import car
 import openpilot.cereal.messaging as messaging
-from openpilot.common.hardware import ASIUS, HARDWARE
+from openpilot.common.hardware import HARDWARE
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process
@@ -41,7 +41,7 @@ HEIGHT_INIT = np.array([1.22])
 # These values are needed to accommodate the model frame in the narrow cam
 if HARDWARE.get_device_type() == 'mici':
   PITCH_LIMITS = np.array([-0.143101, 0.22235988])
-elif ASIUS:
+elif HARDWARE.get_device_type() == 'v1':
   PITCH_LIMITS = np.array([np.radians(-6.5), 0.17])
 else:
   PITCH_LIMITS = np.array([-0.09074112085129739, 0.17])

@@ -38,7 +38,7 @@ from openpilot.common.basedir import BASEDIR
 from openpilot.common.utils import CallbackReader, get_upload_stream
 from openpilot.common.params import Params
 from openpilot.common.realtime import set_core_affinity
-from openpilot.common.hardware import ASIUS, HARDWARE, PC
+from openpilot.common.hardware import DEVICE_TYPE, HARDWARE, PC
 from openpilot.system.loggerd.config import CAMERA_FPS, SEGMENT_LENGTH
 from openpilot.system.loggerd.xattr_cache import getxattr, setxattr
 from openpilot.tools.lib.helpers import RE
@@ -800,7 +800,7 @@ def startStream(sdp: str, enabled: bool) -> dict:
     with car.CarParams.from_bytes(cp_bytes) as CP:
       if CP.notCar:
         bridge_services_in.append("testJoystick")
-  elif not ASIUS:
+  elif DEVICE_TYPE != "v1":
     raise Exception("failed to get CarParamsPersistent")
 
   if params.get_bool("IsOffroad"):

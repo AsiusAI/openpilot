@@ -1,5 +1,4 @@
-import os
-Import('env', 'arch', 'messaging', 'common', 'visionipc')
+Import('env', 'arch', 'messaging', 'common', 'visionipc', 'V1')
 
 libs = [common, messaging, visionipc]
 common_srcs = ['cameras/camera_common.cc']
@@ -9,9 +8,9 @@ v1_srcs = ['cameras/camera_v1.cc', 'cameras/cdm_v1.cc', 'sensors/os04c10_v1.cc',
             '#openpilot/system/hardware/asius/visionbuf_dma.cc'] + common_srcs
 
 if arch != "Darwin":
-  if os.path.isfile("/ASIUS"):
+  if V1:
     camera_obj = env.Object(v1_srcs)
-    env.Program('camerad_v1', ['main.cc', camera_obj], LIBS=libs)
+    env.Program('camerad', ['main.cc', camera_obj], LIBS=libs)
   else:
     camera_obj = env.Object(qcom_srcs)
     env.Program('camerad', ['main.cc', camera_obj], LIBS=libs)

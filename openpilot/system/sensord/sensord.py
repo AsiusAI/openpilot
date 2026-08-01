@@ -11,16 +11,17 @@ from openpilot.common.utils import sudo_write
 from openpilot.common.realtime import config_realtime_process, Ratekeeper
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.gpio import gpiochip_get_ro_value_fd, gpioevent_data
-from openpilot.common.hardware import ASIUS
+from openpilot.common.hardware import DEVICE_TYPE
 
 from openpilot.system.sensord.sensors.i2c_sensor import Sensor
 from openpilot.system.sensord.sensors.lsm6ds3_accel import LSM6DS3_Accel
 from openpilot.system.sensord.sensors.lsm6ds3_gyro import LSM6DS3_Gyro
 from openpilot.system.sensord.sensors.lsm6ds3_temp import LSM6DS3_Temp
 
-I2C_BUS_IMU = 6 if ASIUS else 1
+V1 = DEVICE_TYPE == "v1"
+I2C_BUS_IMU = 6 if V1 else 1
 IMU_GPIOCHIP = 0
-IMU_INTERRUPT_PIN = 0 if ASIUS else 84
+IMU_INTERRUPT_PIN = 0 if V1 else 84
 
 def interrupt_loop(sensors: list[tuple[Sensor, str, bool]], event) -> None:
   pm = messaging.PubMaster([service for sensor, service, interrupt in sensors if interrupt])
@@ -35,7 +36,7 @@ def interrupt_loop(sensors: list[tuple[Sensor, str, bool]], event) -> None:
   fd = gpiochip_get_ro_value_fd("sensord", IMU_GPIOCHIP, IMU_INTERRUPT_PIN)
 
   # Configure IRQ affinity
-  if not ASIUS:
+  if not V1:
     irq_path = "/proc/irq/336/smp_affinity_list"
     if not os.path.exists(irq_path):
       irq_path = "/proc/irq/335/smp_affinity_list"

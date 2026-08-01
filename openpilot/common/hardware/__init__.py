@@ -16,3 +16,4 @@ if COMMA_HARDWARE or ASIUS_HARDWARE:
   HARDWARE = cast(HardwareBase, HardwareComma())
 else:
   HARDWARE = cast(HardwareBase, HardwarePc())
+DEVICE_TYPE = HARDWARE.get_device_type()

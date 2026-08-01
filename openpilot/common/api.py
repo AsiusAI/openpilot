@@ -4,12 +4,12 @@ from pathlib import Path
 
 import requests
 from datetime import datetime, timedelta, UTC
-from openpilot.common.hardware import ASIUS
+from openpilot.common.hardware import DEVICE_TYPE
 from openpilot.common.hardware.hw import Paths
 from openpilot.common.params import Params
 from openpilot.common.version import get_version
 
-API_HOST = Params().get("APIHost", return_default=True) if ASIUS else os.getenv('API_HOST', 'https://api.commadotai.com')
+API_HOST = Params().get("APIHost", return_default=True) if DEVICE_TYPE == "v1" else os.getenv('API_HOST', 'https://api.commadotai.com')
 
 # name: jwt signature algorithm
 KEYS = {"id_rsa": "RS256",
@@ -61,7 +61,7 @@ def api_get(endpoint, method='GET', timeout=None, access_token=None, session=Non
 
 
 def get_key_pair() -> tuple[str, str, str] | tuple[None, None, None]:
-  if ASIUS:
+  if DEVICE_TYPE == "v1":
     key_path = Path(Paths.persist_root()) / "comma" / "id_ed25519"
     public_key_path = key_path.with_suffix(".pub")
     if key_path.is_file() and public_key_path.is_file():

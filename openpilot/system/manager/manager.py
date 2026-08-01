@@ -12,7 +12,7 @@ import openpilot.system.sentry as sentry
 from openpilot.common.utils import atomic_write
 from openpilot.common.params import Params, ParamKeyFlag
 from openpilot.common.text_window import TextWindow
-from openpilot.common.hardware import ASIUS, HARDWARE
+from openpilot.common.hardware import DEVICE_TYPE, HARDWARE
 from openpilot.system.manager.helpers import unblock_stdout, save_bootlog
 from openpilot.system.manager.process import ensure_running
 from openpilot.system.manager.process_config import managed_processes
@@ -38,7 +38,7 @@ def manager_init() -> None:
   if params.get_bool("RecordFrontLock"):
     params.put_bool("RecordFront", True, block=True)
 
-  if ASIUS:
+  if DEVICE_TYPE == "v1":
     params.remove("AthenadPairingUntil")
     v1_defaults = {
       "AlphaLongitudinalEnabled": True,

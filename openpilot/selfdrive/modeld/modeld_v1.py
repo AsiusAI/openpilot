@@ -304,7 +304,7 @@ def main(demo=False):
   params.put_bool("UsbGpuLoading", USBGPU)
   params.remove("UsbGpuActive")
 
-  config_realtime_process([6, 7] if os.path.isfile("/ASIUS") else 7, 54)
+  config_realtime_process([6, 7], 54)
 
   # visionipc clients
   while True:

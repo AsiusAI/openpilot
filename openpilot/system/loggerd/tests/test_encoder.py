@@ -14,7 +14,6 @@ from tqdm import trange
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.common.params import Params
 from openpilot.common.timeout import Timeout
-from openpilot.common.hardware import ASIUS, ASIUS_HARDWARE, COMMA_HARDWARE
 from openpilot.system.manager.process_config import managed_processes
 from openpilot.tools.lib.logreader import LogReader
 from openpilot.common.hardware.hw import Paths
@@ -28,13 +27,12 @@ CAMERAS = [
   ("ecamera.hevc", 20, hevc_size, "wideRoadEncodeIdx"),
   ("qcamera.ts", 20, lambda x: 130000, None),
 ]
-CAMERAD_PROCESS = "camerad_v1" if ASIUS else "camerad"
-ENCODERD_PROCESS = "encoderd_v1" if ASIUS else "encoderd"
-WARMUP_SEGMENTS = 1 if ASIUS else 0
+CAMERAD_PROCESS = "camerad"
+ENCODERD_PROCESS = "encoderd"
+WARMUP_SEGMENTS = 1
 
 # we check frame count, so we don't have to be too strict on size
-FILE_SIZE_TOLERANCE = 0.7
-ASIUS_FILE_SIZE_TOLERANCE = 0.9
+FILE_SIZE_TOLERANCE = 0.9
 
 
 class TestEncoder(OpenpilotTestCase):
@@ -80,8 +78,6 @@ class TestEncoder(OpenpilotTestCase):
 
     def check_seg(i):
       # check each camera file size
-      counts = []
-      first_frames = []
       for camera, fps, size_lambda, encode_idx_name in CAMERAS:
         file_path = f"{route_prefix_path}--{i}/{camera}"
 
@@ -91,27 +87,17 @@ class TestEncoder(OpenpilotTestCase):
         # TODO: this ffprobe call is really slow
         # get width and check frame count
         cmd = f"ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets,width -of csv=p=0 {file_path}"
-        if COMMA_HARDWARE or ASIUS_HARDWARE:
-          cmd = "LD_LIBRARY_PATH=/usr/local/lib " + cmd
-
         expected_frames = fps * SEGMENT_LENGTH
         probe = subprocess.check_output(cmd, shell=True, encoding='utf8').split('\n')[0].strip().split(',')
         frame_width, frame_count = int(probe[0]), int(probe[1])
-        counts.append(frame_count)
-
-        if ASIUS:
-          min_frames = expected_frames - fps
-          assert min_frames <= frame_count <= expected_frames, \
-            f"segment #{i}: {camera} expected {min_frames}-{expected_frames} frames, got {frame_count}"
-        else:
-          assert frame_count == expected_frames, \
-                           f"segment #{i}: {camera} failed frame count check: expected {expected_frames}, got {frame_count}"
+        min_frames = expected_frames - fps
+        assert min_frames <= frame_count <= expected_frames, \
+          f"segment #{i}: {camera} expected {min_frames}-{expected_frames} frames, got {frame_count}"
 
         # sanity check file size
         file_size = os.path.getsize(file_path)
         target_size = size_lambda(frame_width)
-        size_tolerance = ASIUS_FILE_SIZE_TOLERANCE if ASIUS else FILE_SIZE_TOLERANCE
-        assert math.isclose(file_size, target_size, rel_tol=size_tolerance), \
+        assert math.isclose(file_size, target_size, rel_tol=FILE_SIZE_TOLERANCE), \
                         f"{file_path} size {file_size} isn't close to target size {target_size}"
 
         # Check encodeIdx
@@ -123,34 +109,19 @@ class TestEncoder(OpenpilotTestCase):
           valid = [m.valid for m in msgs]
           segment_idxs = [m.segmentId for m in encode_msgs]
           encode_idxs = [m.encodeId for m in encode_msgs]
-          frame_idxs = [m.frameId for m in encode_msgs]
-
           # Check frame count
           assert frame_count == len(segment_idxs)
           assert frame_count == len(encode_idxs)
 
           # Check for duplicates or skips
-          if ASIUS:
-            assert 0 <= segment_idxs[0] < fps
-          else:
-            assert 0 == segment_idxs[0]
+          assert 0 <= segment_idxs[0] < fps
           assert len(set(segment_idxs)) == len(segment_idxs)
           assert set(np.diff(segment_idxs)) == {1, }
 
           assert all(valid)
 
-          if not ASIUS:
-            assert expected_frames * i == encode_idxs[0]
-          first_frames.append(frame_idxs[0])
           assert len(set(encode_idxs)) == len(encode_idxs)
           assert set(np.diff(encode_idxs)) == {1, }
-
-      if not ASIUS:
-        assert 1 == len(set(first_frames))
-
-      if COMMA_HARDWARE or ASIUS_HARDWARE:
-        expected_frames = fps * SEGMENT_LENGTH
-        assert min(counts) == expected_frames
       shutil.rmtree(f"{route_prefix_path}--{i}")
 
     rotation_start = time.monotonic()
@@ -164,9 +135,8 @@ class TestEncoder(OpenpilotTestCase):
           shutil.rmtree(f"{route_prefix_path}--{i}")
         else:
           check_seg(i)
-      if ASIUS:
-        elapsed = time.monotonic() - rotation_start
-        assert elapsed < SEGMENT_LENGTH * (num_segments + 2), f"encoder rotation took {elapsed:.1f}s"
+      elapsed = time.monotonic() - rotation_start
+      assert elapsed < SEGMENT_LENGTH * (num_segments + 2), f"encoder rotation took {elapsed:.1f}s"
     finally:
       managed_processes['loggerd'].stop()
       managed_processes[ENCODERD_PROCESS].stop()

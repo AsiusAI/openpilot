@@ -2610,6 +2610,7 @@ void CameraState::process_pix_frame(int buf_idx, uint64_t timestamp) {
   MessageBuilder msg;
   auto framed = (msg.initEvent().*camera.cc.init_camera_state)();
   framed.setFrameId(frame_id);
+  framed.setRequestId(frame_id);
   framed.setTimestampEof(timestamp_eof);
   framed.setTimestampSof(timestamp);
   framed.setIntegLines(exposure_time);
