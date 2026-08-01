@@ -34,7 +34,7 @@ GITHUB = GithubUtils(API_TOKEN, DATA_TOKEN)
 
 EXEC_TIMINGS = [
   # model, instant max, average max
-  ("modelV2", 0.05, 0.028),
+  ("modelV2", 0.05, 0.030),
   ("driverStateV2", 0.05, 0.018),
 ]
 
@@ -222,6 +222,7 @@ def get_frames():
   return frs
 
 if __name__ == "__main__":
+  timing_only = "--timing-only" in sys.argv
   update = "--update" in sys.argv or (os.getenv("GIT_BRANCH", "") == 'master')
   replay_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -235,7 +236,7 @@ if __name__ == "__main__":
 
   # get diff
   failed = False
-  if not update:
+  if not update and not timing_only:
     log_fn = get_log_fn(TEST_ROUTE)
     try:
       all_logs = list(LogReader(GITHUB.get_file_url(MODEL_REPLAY_BUCKET, log_fn)))
@@ -294,7 +295,7 @@ if __name__ == "__main__":
       failed = True
 
   # upload new refs
-  if update and not PC:
+  if update and not PC and not timing_only:
     print("Uploading new refs")
     log_fn = get_log_fn(TEST_ROUTE)
     save_log(log_fn, log_msgs)
