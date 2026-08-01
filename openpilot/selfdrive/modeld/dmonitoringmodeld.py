@@ -8,18 +8,19 @@ import numpy as np
 
 from openpilot.cereal import messaging
 from openpilot.cereal.messaging import PubMaster, SubMaster
-from openpilot.cereal.visionipc import VisionStreamType
-from msgq.visionipc import VisionIpcClient, VisionBuf
+from msgq.visionipc import VisionIpcClient, VisionStreamType, VisionBuf
+from openpilot.common.hardware import DEVICE_TYPE
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.realtime import config_realtime_process
 from openpilot.common.transformations.model import dmonitoringmodel_intrinsics
 from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
 from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
 from openpilot.common.file_chunker import open_file_chunked
-from openpilot.selfdrive.modeld.parse_model_outputs import sigmoid, safe_exp
+from openpilot.selfdrive.modeld.parse_model_outputs import safe_exp, safe_exp_inplace, sigmoid, sigmoid_inplace
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.dmonitoringmodeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
+V1 = DEVICE_TYPE == "v1"
 MODEL_PKL_PATH = MODELS_DIR / 'dmonitoring_model_tinygrad.pkl'
 METADATA_PATH = MODELS_DIR / 'dmonitoring_model_metadata.pkl'
 
@@ -44,6 +45,7 @@ class ModelState:
     self.frame_buf_params = get_nv12_info(cam_w, cam_h)
     self.tensor_inputs = {k: Tensor(v, device='NPY').realize() for k,v in self.numpy_inputs.items()}
     self._blob_cache : dict[int, Tensor] = {}
+    self._uploaded_frame = Tensor.empty(self.frame_buf_params[3], dtype='uint8', device=self.DEV).realize() if V1 and self.DEV.startswith("CL") else None
     self.model_run = pickle.load(open_file_chunked(str(MODEL_PKL_PATH)))
     with open(MODELS_DIR / f'dm_warp_{cam_w}x{cam_h}_tinygrad.pkl', "rb") as f:
       self.image_warp = pickle.load(f)
@@ -53,13 +55,19 @@ class ModelState:
 
     t1 = time.perf_counter()
 
-    ptr = np.frombuffer(buf.data, dtype=np.uint8).ctypes.data
-    # There is a ringbuffer of imgs, just cache tensors pointing to all of them
-    if ptr not in self._blob_cache:
-      self._blob_cache[ptr] = Tensor.from_blob(ptr, (self.frame_buf_params[3],), dtype='uint8', device=self.DEV)
+    if self._uploaded_frame is not None:
+      frame_buffer = self._uploaded_frame._buffer()
+      frame_buffer.allocator._copyin(frame_buffer._buf, buf.data[:self.frame_buf_params[3]])
+      frame = self._uploaded_frame
+    else:
+      ptr = np.frombuffer(buf.data, dtype=np.uint8).ctypes.data
+      # There is a ringbuffer of imgs, just cache tensors pointing to all of them
+      if ptr not in self._blob_cache:
+        self._blob_cache[ptr] = Tensor.from_blob(ptr, (self.frame_buf_params[3],), dtype='uint8', device=self.DEV)
+      frame = self._blob_cache[ptr]
 
     self.warp_inputs_np['transform'][:] = transform[:]
-    self.tensor_inputs['input_img'] = self.image_warp(self._blob_cache[ptr], self.warp_inputs['transform'])
+    self.tensor_inputs['input_img'] = self.image_warp(frame, self.warp_inputs['transform'])
 
     output = self.model_run(**self.tensor_inputs).numpy().flatten()
 
@@ -70,14 +78,16 @@ def slice_outputs(model_outputs, output_slices):
   return  {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
 
 def parse_model_output(model_output):
+  sigmoid_fn = sigmoid_inplace if V1 else sigmoid
+  safe_exp_fn = safe_exp_inplace if V1 else safe_exp
   parsed = {}
-  parsed['wheel_on_right'] = sigmoid(model_output['wheel_on_right'])
+  parsed['wheel_on_right'] = sigmoid_fn(model_output['wheel_on_right'])
   for ds_suffix in ['lhd', 'rhd']:
     face_descs = model_output[f'face_descs_{ds_suffix}']
     parsed[f'face_descs_{ds_suffix}'] = face_descs[:, :-6]
-    parsed[f'face_descs_{ds_suffix}_std'] = safe_exp(face_descs[:, -6:])
+    parsed[f'face_descs_{ds_suffix}_std'] = safe_exp_fn(face_descs[:, -6:])
     for key in ['face_prob', 'left_eye_prob', 'right_eye_prob','left_blink_prob', 'right_blink_prob', 'sunglasses_prob', 'using_phone_prob', 'sleep_prob']:
-      parsed[f'{key}_{ds_suffix}'] = sigmoid(model_output[f'{key}_{ds_suffix}'])
+      parsed[f'{key}_{ds_suffix}'] = sigmoid_fn(model_output[f'{key}_{ds_suffix}'])
   return parsed
 
 def fill_driver_data(msg, model_output, ds_suffix):
@@ -108,7 +118,7 @@ def get_driverstate_packet(model_output, frame_id: int, location_ts: int, exec_t
 
 
 def main():
-  config_realtime_process(7, 5)
+  config_realtime_process([6, 7] if V1 else 7, 5)
 
   cloudlog.warning("connecting to cabin stream")
   vipc_client = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_CABIN, True)
@@ -120,11 +130,13 @@ def main():
   model = ModelState(vipc_client.width, vipc_client.height)
   cloudlog.warning("models loaded, dmonitoringmodeld starting")
 
-  sm = SubMaster(["extrinsicsCalibration"])
+  sm = SubMaster(["liveCalibration"] + (["modelV2"] if V1 else []))
   pm = PubMaster(["driverStateV2"])
 
   calib = np.zeros(model.numpy_inputs['calib'].size, dtype=np.float32)
   model_transform = None
+  last_model_output = None
+  iteration = 0
 
   while True:
     buf = vipc_client.recv()
@@ -139,14 +151,25 @@ def main():
     if sm.updated["extrinsicsCalibration"]:
       calib[:] = np.array(sm["extrinsicsCalibration"].rpyCalib)
 
-    t1 = time.perf_counter()
-    model_output, gpu_execution_time = model.run(buf, calib, model_transform)
-    t2 = time.perf_counter()
-    raw_pred = model_output.tobytes() if SEND_RAW_PRED else b''
-    model_output = slice_outputs(model_output, model.output_slices)
-    model_output = parse_model_output(model_output)
-    model_output['raw_pred'] = raw_pred
-    msg = get_driverstate_packet(model_output, vipc_client.frame_id, vipc_client.timestamp_sof, t2 - t1, gpu_execution_time)
+    road_model_active = V1 and sm.alive["modelV2"]
+    run_model = last_model_output is None or not (road_model_active and iteration % 2)
+    iteration += 1
+    if run_model:
+      if road_model_active:
+        time.sleep(0.01)
+      t1 = time.perf_counter()
+      raw_output, gpu_execution_time = model.run(buf, calib, model_transform)
+      model_execution_time = time.perf_counter() - t1
+      raw_pred = raw_output.tobytes() if SEND_RAW_PRED else b''
+      model_output = parse_model_output(slice_outputs(raw_output, model.output_slices))
+      model_output['raw_pred'] = raw_pred
+      last_model_output = model_output
+    else:
+      model_output = last_model_output
+      model_execution_time = 0.0
+      gpu_execution_time = 0.0
+
+    msg = get_driverstate_packet(model_output, vipc_client.frame_id, vipc_client.timestamp_sof, model_execution_time, gpu_execution_time)
     pm.send("driverStateV2", msg)
 
 

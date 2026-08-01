@@ -141,25 +141,6 @@ class TestAthenadMethods(OpenpilotTestCase):
       end_event.set()
       p.join()
 
-  def test_start_stream_without_car_params_on_v1(self, mocker):
-    self.params.remove("CarParamsPersistent")
-    self.params.put_bool("IsOffroad", False)
-    mocker.patch.object(athenad, "DEVICE_TYPE", "v1")
-    post_stream_request = mocker.patch(
-      "openpilot.system.webrtc.helpers.post_stream_request",
-      return_value={"sdp": "answer", "type": "answer"},
-    )
-
-    assert dispatcher["startStream"]("offer", True) == {"sdp": "answer", "type": "answer"}
-    assert post_stream_request.call_args.args[0].bridge_services_in == []
-
-  def test_start_stream_without_car_params_on_tici(self, mocker):
-    self.params.remove("CarParamsPersistent")
-    mocker.patch.object(athenad, "DEVICE_TYPE", "tici")
-
-    with self.assertRaisesRegex(Exception, "failed to get CarParamsPersistent"):
-      dispatcher["startStream"]("offer", True)
-
   def test_list_data_directory(self):
     route = '2021-03-29--13-32-47'
     segments = [0, 1, 2, 3, 11]

@@ -19,6 +19,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 from openpilot.common.hardware import AGNOS, HARDWARE, VAMOS
 from openpilot.common.version import get_build_metadata
+from openpilot.system.updated.vamos_update import activate_vamos_update, prepare_vamos_update, should_skip_noop_vamos_fetch
 
 LOCK_FILE = os.getenv("UPDATER_LOCK_FILE", "/tmp/safe_staging_overlay.lock")
 STAGING_ROOT = os.getenv("UPDATER_STAGING_ROOT", "/data/safe_staging")
@@ -69,37 +70,6 @@ def write_time_to_param(params, param) -> None:
 
 def run(cmd: list[str], cwd: str | None = None) -> str:
   return subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT, encoding='utf8')
-
-
-def run_vamos_update(cmd: list[str]) -> str:
-  params = Params()
-  output: list[str] = []
-  progress = 0
-  process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf8")
-  assert process.stdout is not None
-
-  for line in process.stdout:
-    output.append(line)
-    cloudlog.info(line.rstrip())
-    match = re.search(r"vamos-update: (system|esp): (\d+)%", line)
-    if match is not None:
-      image, image_progress = match.group(1), int(match.group(2))
-      estimated = int(image_progress * 0.45) if image == "system" else 90 + int(image_progress * 0.05)
-      progress = max(progress, estimated)
-    elif "vamos-update: verifying system from disk" in line:
-      progress = max(progress, 45)
-    elif "vamos-update: writing esp " in line:
-      progress = max(progress, 90)
-    elif "vamos-update: verifying esp from disk" in line:
-      progress = max(progress, 95)
-    params.put("UpdaterProgress", progress, block=True)
-
-  returncode = process.wait()
-  result = "".join(output)
-  if returncode != 0:
-    raise subprocess.CalledProcessError(returncode, cmd, output=result)
-  params.put("UpdaterProgress", 98, block=True)
-  return result
 
 
 def set_consistent_flag(consistent: bool) -> None:
@@ -252,41 +222,6 @@ def handle_agnos_update() -> None:
   manifest_path = os.path.join(OVERLAY_MERGED, "openpilot/system/hardware/comma/agnos.json")
   target_slot_number = get_target_slot_number()
   flash_agnos_update(manifest_path, target_slot_number, cloudlog)
-
-def prepare_vamos_update() -> bool:
-  cur_version = HARDWARE.get_os_version()
-  updated_version = run(["bash", "-c", r"unset VAMOS_VERSION && source launch_env.sh && \
-                          echo -n $VAMOS_VERSION"], OVERLAY_MERGED).strip()
-
-  cloudlog.info(f"vamOS version check: {cur_version} vs {updated_version}")
-  if cur_version == updated_version:
-    return False
-
-  # Keep the openpilot overlay unbootable until both inactive-slot images have
-  # been written and verified. Trial activation happens only after finalization.
-  set_consistent_flag(False)
-  cloudlog.info(f"Beginning background installation for vamOS {updated_version}")
-  set_offroad_alert("Offroad_NeosUpdate", True)
-
-  manifest_path = os.path.join(OVERLAY_MERGED, "openpilot/system/hardware/asius/vamos.json")
-  try:
-    run_vamos_update(["sudo", "/usr/bin/vamos-update", "install", manifest_path, "--defer-activation"])
-  except Exception:
-    set_offroad_alert("Offroad_NeosUpdate", False)
-    raise
-  return True
-
-
-def activate_vamos_update() -> None:
-  try:
-    run(["sudo", "/usr/bin/vamos-update", "activate"])
-  finally:
-    set_offroad_alert("Offroad_NeosUpdate", False)
-
-
-def should_skip_noop_vamos_fetch(update_available: bool, user_request: int) -> bool:
-  return VAMOS and not update_available and user_request != UserRequest.FETCH
-
 
 
 class Updater:
@@ -472,7 +407,7 @@ class Updater:
     if AGNOS:
       handle_agnos_update()
     elif VAMOS:
-      vamos_update_pending = prepare_vamos_update()
+      vamos_update_pending = prepare_vamos_update(OVERLAY_MERGED, HARDWARE.get_os_version(), set_consistent_flag)
 
     # Create the finalized, ready-to-swap update
     self.params.put("UpdaterState", "finalizing update...", block=True)
@@ -549,7 +484,7 @@ def main() -> None:
         last_fetch = params.get("UpdaterLastFetchTime")
         timed_out = last_fetch is None or (datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - last_fetch > datetime.timedelta(days=3))
         user_requested_fetch = wait_helper.user_request == UserRequest.FETCH
-        if should_skip_noop_vamos_fetch(updater.update_available, wait_helper.user_request):
+        if should_skip_noop_vamos_fetch(VAMOS, updater.update_available, wait_helper.user_request, UserRequest.FETCH):
           cloudlog.info("skipping fetch, vamOS checkout is already up to date")
         elif params.get_bool("NetworkMetered") and not timed_out and not user_requested_fetch:
           cloudlog.info("skipping fetch, connection metered")

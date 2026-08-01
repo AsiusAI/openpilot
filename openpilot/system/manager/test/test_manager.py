@@ -33,10 +33,6 @@ class TestManager(OpenpilotTestCase):
   def test_duplicate_procs(self):
     assert len(procs) == len(managed_processes), "Duplicate process names"
 
-  def test_vision_process_contract(self):
-    assert {"camerad", "encoderd", "stream_encoderd"} <= managed_processes.keys()
-    assert not {"camerad_v1", "encoderd_v1", "stream_encoderd_v1"} & managed_processes.keys()
-
   def test_blacklisted_procs(self):
     # TODO: ensure there are blacklisted procs until we have a dedicated test
     assert len(BLACKLIST_PROCS), "No blacklisted procs to test not_run"

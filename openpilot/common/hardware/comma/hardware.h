@@ -13,19 +13,8 @@ class HardwareComma : public HardwareNone {
 public:
   static std::string get_name() {
     static const std::string name = []() {
-      if (const char *device_type = std::getenv("DEVICE_TYPE"); device_type != nullptr && device_type[0] != '\0') {
-        return std::string(device_type);
-      }
-
       std::string model = util::read_file("/sys/firmware/devicetree/base/model");
-      std::string stripped = util::strip(model);
-      if (stripped.rfind("comma ", 0) == 0) {
-        return stripped.substr(6);
-      }
-      if (stripped == "asius v1" || stripped == "Radxa Dragon Q6A") {
-        return std::string("v1");
-      }
-      return stripped;
+      return util::strip(model.substr(std::string("comma ").size()));
     }();
     return name;
   }
@@ -75,13 +64,8 @@ public:
     std::map<std::string, std::string> ret = {
       {"/BUILD", util::read_file("/BUILD")},
       {"lsblk", util::check_output("lsblk -o NAME,SIZE,STATE,VENDOR,MODEL,REV,SERIAL")},
+      {"SOM ID", util::read_file("/sys/devices/platform/vendor/vendor:gpio-som-id/som_id")},
     };
-
-    if (get_device_type() == cereal::InitData::DeviceType::V1) {
-      return ret;
-    }
-
-    ret["SOM ID"] = util::read_file("/sys/devices/platform/vendor/vendor:gpio-som-id/som_id");
 
     std::string bs = util::check_output("abctl --boot_slot");
     ret["boot slot"] = bs.substr(0, bs.find_first_of("\n"));

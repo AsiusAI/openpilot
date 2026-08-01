@@ -1,5 +1,10 @@
+from pathlib import Path
+
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_pem_public_key
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat, load_pem_public_key
+
+from openpilot.common.api import get_key_pair
+from openpilot.common.hardware.hw import Paths
 
 BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 ED25519_KEY_BYTES = 32
@@ -66,3 +71,21 @@ def public_key_from_dongle_id(dongle_id: str) -> str:
 
   key = ed25519.Ed25519PublicKey.from_public_bytes(identity_to_bytes(dongle_id))
   return key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo).decode()
+
+
+def get_or_create_device_identity() -> str:
+  _, _, public_key = get_key_pair()
+  if public_key is None:
+    private_key_path = Path(Paths.persist_root()) / "comma" / "id_ed25519"
+    public_key_path = private_key_path.with_suffix(".pub")
+    private_key_path.parent.mkdir(parents=True, exist_ok=True)
+
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    private_key_path.write_bytes(private_key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
+    private_key_path.chmod(0o600)
+
+    public_key_bytes = private_key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+    public_key_path.write_bytes(public_key_bytes)
+    public_key = public_key_bytes.decode()
+
+  return dongle_id_from_public_key(public_key)

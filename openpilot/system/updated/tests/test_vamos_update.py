@@ -1,8 +1,9 @@
 from pathlib import Path
 import tempfile
+import json
 
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.system.updated import updated
+from openpilot.system.updated import updated, vamos_update
 
 
 def tmp_path():
@@ -11,27 +12,22 @@ def tmp_path():
 
 
 class TestVamosUpdate(OpenpilotTestCase):
+  @staticmethod
+  def write_manifest(tmp_path: Path, version: str) -> None:
+    manifest = tmp_path / "openpilot/system/hardware/asius/vamos.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"version": version}))
+
   def test_prepare_vamos_update_stages_without_activation(self, monkeypatch, tmp_path: Path) -> None:
     commands: list[list[str]] = []
     consistency: list[bool] = []
     alerts: list[bool] = []
 
-    monkeypatch.setattr(updated.HARDWARE, "get_os_version", lambda: "17.2")
-    monkeypatch.setattr(updated, "OVERLAY_MERGED", str(tmp_path))
-    monkeypatch.setattr(updated, "set_consistent_flag", consistency.append)
-    monkeypatch.setattr(updated, "set_offroad_alert", lambda name, enabled: alerts.append(enabled))
+    monkeypatch.setattr(vamos_update, "set_offroad_alert", lambda name, enabled: alerts.append(enabled))
+    self.write_manifest(tmp_path, "18.1")
+    monkeypatch.setattr(vamos_update, "run_vamos_update", lambda command: commands.append(command) or "")
 
-    def fake_run(command: list[str], cwd: str | None = None) -> str:
-      if command[0] == "bash":
-        assert cwd == str(tmp_path)
-        return "18.1"
-      commands.append(command)
-      return ""
-
-    monkeypatch.setattr(updated, "run", fake_run)
-    monkeypatch.setattr(updated, "run_vamos_update", lambda command: commands.append(command) or "")
-
-    assert updated.prepare_vamos_update()
+    assert vamos_update.prepare_vamos_update(str(tmp_path), "17.2", consistency.append)
     assert consistency == [False]
     assert alerts == [True]
     assert commands == [[
@@ -41,19 +37,17 @@ class TestVamosUpdate(OpenpilotTestCase):
     ]]
 
   def test_prepare_vamos_update_skips_matching_version(self, monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(updated.HARDWARE, "get_os_version", lambda: "18.1")
-    monkeypatch.setattr(updated, "OVERLAY_MERGED", str(tmp_path))
-    monkeypatch.setattr(updated, "run", lambda command, cwd=None: "18.1")
+    self.write_manifest(tmp_path, "18.1")
 
-    assert not updated.prepare_vamos_update()
+    assert not vamos_update.prepare_vamos_update(str(tmp_path), "18.1", lambda consistent: None)
 
   def test_activate_vamos_update_clears_alert_on_failure(self, monkeypatch) -> None:
     alerts: list[bool] = []
-    monkeypatch.setattr(updated, "set_offroad_alert", lambda name, enabled: alerts.append(enabled))
-    monkeypatch.setattr(updated, "run", lambda command, cwd=None: (_ for _ in ()).throw(RuntimeError("EFI failure")))
+    monkeypatch.setattr(vamos_update, "set_offroad_alert", lambda name, enabled: alerts.append(enabled))
+    monkeypatch.setattr(vamos_update.subprocess, "check_output", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("EFI failure")))
 
     with self.assertRaisesRegex(RuntimeError, "EFI failure"):
-      updated.activate_vamos_update()
+      vamos_update.activate_vamos_update()
 
     assert alerts == [False]
 
@@ -67,8 +61,7 @@ class TestVamosUpdate(OpenpilotTestCase):
     ]
     for vamos, update_available, user_request, expected in cases:
       with self.subTest(vamos=vamos, update_available=update_available, user_request=user_request):
-        monkeypatch.setattr(updated, "VAMOS", vamos)
-        assert updated.should_skip_noop_vamos_fetch(update_available, user_request) is expected
+        assert vamos_update.should_skip_noop_vamos_fetch(vamos, update_available, user_request, updated.UserRequest.FETCH) is expected
 
   def test_vamos_stdout_progress_fallback(self, monkeypatch) -> None:
     progress: list[int] = []
@@ -93,10 +86,10 @@ class TestVamosUpdate(OpenpilotTestCase):
       def wait() -> int:
         return 0
 
-    monkeypatch.setattr(updated, "Params", FakeParams)
-    monkeypatch.setattr(updated.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(vamos_update, "Params", FakeParams)
+    monkeypatch.setattr(vamos_update.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
 
-    output = updated.run_vamos_update(["vamos-update", "install", "vamos.json"])
+    output = vamos_update.run_vamos_update(["vamos-update", "install", "vamos.json"])
 
     assert "verifying system" in output
     assert progress[-1] == 98

@@ -1,13 +1,10 @@
 import tempfile
-import json
 from pathlib import Path
 from unittest import mock
 
-from Crypto.PublicKey import RSA
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
 
-from openpilot.common import api
 from openpilot.common.params import Params
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.system.athena.identity import (
@@ -19,8 +16,6 @@ from openpilot.system.athena.registration import (
   register,
   UNREGISTERED_DONGLE_ID,
 )
-from openpilot.system.athena import registration
-from openpilot.system.athena.tests.helpers import MockResponse
 from openpilot.common.hardware.hw import Paths
 
 
@@ -37,8 +32,6 @@ class TestRegistration(OpenpilotTestCase):
 
     self.priv_key = persist_dir / "id_ed25519"
     self.pub_key = persist_dir / "id_ed25519.pub"
-    self.enterContext(mock.patch.object(api, "DEVICE_TYPE", "v1"))
-    self.enterContext(mock.patch.object(registration, "DEVICE_TYPE", "v1"))
 
   def _generate_keys(self) -> str:
     key = ed25519.Ed25519PrivateKey.generate()
@@ -84,63 +77,8 @@ class TestRegistration(OpenpilotTestCase):
     assert dongle == dongle_id_from_public_key(public_key)
 
   def test_key_create_failure(self, mocker):
-    mocker.patch("openpilot.system.athena.registration.ed25519.Ed25519PrivateKey.generate", side_effect=OSError("no write"))
+    mocker.patch("openpilot.system.athena.identity.ed25519.Ed25519PrivateKey.generate", side_effect=OSError("no write"))
 
     dongle = register()
     assert dongle == UNREGISTERED_DONGLE_ID
     assert self.params.get("DongleId") == dongle
-
-
-class TestCommaRegistration(OpenpilotTestCase):
-
-  def setup_method(self):
-    self.params = Params()
-
-    persist_root = Path(self.enterContext(tempfile.TemporaryDirectory())) / "persist"
-    self.enterContext(mock.patch.object(Paths, "persist_root", staticmethod(lambda: str(persist_root))))
-    self.enterContext(mock.patch.object(api, "DEVICE_TYPE", "tici"))
-    self.enterContext(mock.patch.object(registration, "DEVICE_TYPE", "tici"))
-
-    persist_dir = Path(Paths.persist_root()) / "comma"
-    persist_dir.mkdir(parents=True, exist_ok=True)
-    self.priv_key = persist_dir / "id_rsa"
-    self.pub_key = persist_dir / "id_rsa.pub"
-    self.dongle_id = persist_dir / "dongle_id"
-
-  def _generate_keys(self):
-    key = RSA.generate(2048)
-    self.priv_key.write_bytes(key.export_key())
-    self.pub_key.write_bytes(key.publickey().export_key())
-
-  def test_valid_cache(self, mocker):
-    self._generate_keys()
-    dongle = "DONGLE_ID_123"
-    request = mocker.patch.object(registration, "api_get", autospec=True)
-
-    for persist, params in [(True, True), (True, False), (False, True)]:
-      self.params.put("DongleId", dongle if params else "", block=True)
-      self.dongle_id.write_text(dongle if persist else "")
-      assert register() == dongle
-      assert not request.called
-
-  def test_no_keys(self, mocker):
-    request = mocker.patch.object(registration, "api_get", autospec=True)
-    assert register() == UNREGISTERED_DONGLE_ID
-    assert not request.called
-
-  def test_missing_cache(self, mocker):
-    self._generate_keys()
-    request = mocker.patch.object(registration, "api_get", autospec=True)
-    request.return_value = MockResponse(json.dumps({'dongle_id': "DONGLE_ID_123"}), 200)
-
-    assert register() == "DONGLE_ID_123"
-    assert register() == "DONGLE_ID_123"
-    assert request.call_count == 1
-
-  def test_unregistered(self, mocker):
-    self._generate_keys()
-    request = mocker.patch.object(registration, "api_get", autospec=True)
-    request.return_value = MockResponse(None, 402)
-
-    assert register() == UNREGISTERED_DONGLE_ID
-    assert request.call_count == 1

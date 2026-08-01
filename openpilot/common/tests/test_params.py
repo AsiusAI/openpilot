@@ -22,10 +22,8 @@ class TestParams(OpenpilotTestCase):
 
   def test_params_get_cleared_manager_start(self):
     self.params.put("CarParams", b"test", block=True)
-    self.params.put("AthenadBlePairing", {"status": "pending"}, block=True)
     self.params.put("DongleId", "cb38263377b873ee", block=True)
     assert self.params.get("CarParams") == b"test"
-    assert self.params.get("AthenadBlePairing") == {"status": "pending"}
 
     undefined_param = self.params.get_param_path(uuid.uuid4().hex)
     with open(undefined_param, "w") as f:
@@ -34,7 +32,6 @@ class TestParams(OpenpilotTestCase):
 
     self.params.clear_all(ParamKeyFlag.CLEAR_ON_MANAGER_START)
     assert self.params.get("CarParams") is None
-    assert self.params.get("AthenadBlePairing") is None
     assert self.params.get("DongleId") is not None
     assert not os.path.isfile(undefined_param)
 
