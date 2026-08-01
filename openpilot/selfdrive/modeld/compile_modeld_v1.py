@@ -447,7 +447,7 @@ def _program_argument_types(call) -> tuple[str, ...]:
   return tuple(declaration.strip().rsplit(" ", 1)[0] for declaration in source[args_start:args_end].split(","))
 
 
-def _replace_program(call, suffix: str, source: str, global_size: tuple[int, ...], local_size: tuple[int, ...],
+def _replace_program(call, suffix: str, source: str, global_size: tuple[int | float, ...], local_size: tuple[int, ...],
                      globals_: tuple[int, ...], outs: tuple[int, ...], ins: tuple[int, ...], aux: tuple):
   from tinygrad.uop.ops import Ops
 
@@ -619,7 +619,7 @@ def _pair_source(call, local_z: bool) -> str:
   paired_declarations = [f"{prefix} {arg}_a" for prefix, arg in parsed]
   paired_declarations += [f"{prefix} {arg}_b" for prefix, arg in parsed]
   pair_index = "get_local_id(2)" if local_z else "get_group_id(2)"
-  aliases = [f"  const int pair_idx = {pair_index};"]
+  aliases: list[str] = [f"  const int pair_idx = {pair_index};"]
   aliases += [f"  {prefix} {arg} = pair_idx == 0 ? {arg}_a : {arg}_b;" for prefix, arg in parsed]
   return (source[:signature_start] + "__kernel void KERNEL_NAME(" + ", ".join(paired_declarations) + ") {\n" +
           "\n".join(aliases) + source[args_end + 3:])
