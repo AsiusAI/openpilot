@@ -16,7 +16,7 @@ from openpilot.common.transformations.model import dmonitoringmodel_intrinsics
 from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
 from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
 from openpilot.common.file_chunker import open_file_chunked
-from openpilot.selfdrive.modeld.parse_model_outputs import sigmoid, safe_exp
+from openpilot.selfdrive.modeld.parse_model_outputs import safe_exp_inplace, sigmoid_inplace
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.dmonitoringmodeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
@@ -78,13 +78,13 @@ def slice_outputs(model_outputs, output_slices):
 
 def parse_model_output(model_output):
   parsed = {}
-  parsed['wheel_on_right'] = sigmoid(model_output['wheel_on_right'])
+  parsed['wheel_on_right'] = sigmoid_inplace(model_output['wheel_on_right'])
   for ds_suffix in ['lhd', 'rhd']:
     face_descs = model_output[f'face_descs_{ds_suffix}']
     parsed[f'face_descs_{ds_suffix}'] = face_descs[:, :-6]
-    parsed[f'face_descs_{ds_suffix}_std'] = safe_exp(face_descs[:, -6:])
+    parsed[f'face_descs_{ds_suffix}_std'] = safe_exp_inplace(face_descs[:, -6:])
     for key in ['face_prob', 'left_eye_prob', 'right_eye_prob','left_blink_prob', 'right_blink_prob', 'sunglasses_prob', 'using_phone_prob', 'sleep_prob']:
-      parsed[f'{key}_{ds_suffix}'] = sigmoid(model_output[f'{key}_{ds_suffix}'])
+      parsed[f'{key}_{ds_suffix}'] = sigmoid_inplace(model_output[f'{key}_{ds_suffix}'])
   return parsed
 
 def fill_driver_data(msg, model_output, ds_suffix):

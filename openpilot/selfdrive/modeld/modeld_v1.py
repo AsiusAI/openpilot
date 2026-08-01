@@ -189,7 +189,7 @@ class ModelState:
     self.input_queues, self.npy = make_input_queues(self.input_shapes, self.frame_skip, device=self.QUEUE_DEV)
     self.full_frames: dict[str, Tensor] = {}
     self._blob_cache: dict[tuple[str, int], Tensor] = {}
-    self.parser = Parser()
+    self.parser = Parser(inplace=True)
     self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in ('img', 'big_img')}
     stride, y_height, _, _ = self.frame_buf_params['img']
     self.frame_buf_used_size = stride * (y_height + cam_h // 2)

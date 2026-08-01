@@ -3,29 +3,34 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 
 def safe_exp(x, out=None):
   # -11 is around 10**14, more causes float16 overflow
-  if out is None:
-    return np.exp(np.minimum(x, 11))
-  np.minimum(x, 11, out=out)
-  return np.exp(out, out=out)
+  return np.exp(np.clip(x, -np.inf, 11), out=out)
 
 def sigmoid(x):
+  return 1. / (1. + safe_exp(-x))
+
+def safe_exp_inplace(x):
+  np.minimum(x, 11, out=x)
+  return np.exp(x, out=x)
+
+def sigmoid_inplace(x):
   np.negative(x, out=x)
-  safe_exp(x, out=x)
+  safe_exp_inplace(x)
   np.add(x, 1., out=x)
   return np.reciprocal(x, out=x)
 
-def softmax(x, axis=-1):
+def softmax(x, axis=-1, inplace=False):
   x -= np.max(x, axis=axis, keepdims=True)
   if x.dtype == np.float32 or x.dtype == np.float64:
-    safe_exp(x, out=x)
+    safe_exp_inplace(x) if inplace else safe_exp(x, out=x)
   else:
-    x = safe_exp(x)
+    x = safe_exp_inplace(x) if inplace else safe_exp(x)
   x /= np.sum(x, axis=axis, keepdims=True)
   return x
 
 class Parser:
-  def __init__(self, ignore_missing=False):
+  def __init__(self, ignore_missing=False, inplace=False):
     self.ignore_missing = ignore_missing
+    self.inplace = inplace
 
   def check_missing(self, outs, name):
     missing = name not in outs
@@ -39,13 +44,13 @@ class Parser:
     raw = outs[name]
     if out_shape is not None:
       raw = raw.reshape((raw.shape[0],) + out_shape)
-    outs[name] = softmax(raw, axis=-1)
+    outs[name] = softmax(raw, axis=-1, inplace=self.inplace)
 
   def parse_binary_crossentropy(self, name, outs):
     if self.check_missing(outs, name):
       return
     raw = outs[name]
-    outs[name] = sigmoid(raw)
+    outs[name] = sigmoid_inplace(raw) if self.inplace else sigmoid(raw)
 
   def parse_mdn(self, name, outs, in_N=0, out_N=1, out_shape=()):
     if self.check_missing(outs, name):
@@ -55,13 +60,16 @@ class Parser:
 
     n_values = (raw.shape[2] - out_N)//2
     pred_mu = raw[:,:,:n_values]
-    pred_std = raw[:,:,n_values: 2*n_values]
-    safe_exp(pred_std, out=pred_std)
+    if self.inplace:
+      pred_std = raw[:,:,n_values: 2*n_values]
+      safe_exp_inplace(pred_std)
+    else:
+      pred_std = safe_exp(raw[:,:,n_values: 2*n_values])
 
     if in_N > 1:
       weights = np.zeros((raw.shape[0], in_N, out_N), dtype=raw.dtype)
       for i in range(out_N):
-        weights[:,:,i - out_N] = softmax(raw[:,:,i - out_N], axis=-1)
+        weights[:,:,i - out_N] = softmax(raw[:,:,i - out_N], axis=-1, inplace=self.inplace)
 
       if out_N == 1:
         for fidx in range(weights.shape[0]):
