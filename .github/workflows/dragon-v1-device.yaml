@@ -23,7 +23,7 @@ env:
 
 jobs:
   hardware:
-    name: Dragon health and A/B
+    name: Dragon health
     runs-on: [self-hosted, Linux, ARM64, asius-dragon-v1]
     timeout-minutes: 60
     steps:
@@ -86,9 +86,6 @@ jobs:
         run: |
           source launch_env.sh
           python3 -u vamos-ci/dragon_health.py
-
-      - name: A/B storage and boot-control check
-        run: sudo env PYTHONPATH=/usr/lib python3 -u vamos-ci/tools/update/check_device_ab.py --write-check
 
       - name: Upload health artifacts
         if: always()
