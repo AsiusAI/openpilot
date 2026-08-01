@@ -1,13 +1,14 @@
-name: Master hardware
+name: Hardware
 
 on:
   push:
     branches:
       - master
+      - v1
   workflow_dispatch:
 
 concurrency:
-  group: master-hardware
+  group: hardware-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -22,29 +23,50 @@ env:
   GIT_CONFIG_VALUE_0: openpilot/selfdrive/modeld/models/big_driving_supercombo.onnx
 
 jobs:
-  comma_3x:
-    name: comma 3X health
-    runs-on: [self-hosted, Linux, ARM64, asius-comma-3x]
+  hardware:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Asius v1
+            device: asius-v1
+            runner: asius-dragon-v1
+          - name: comma 3X
+            device: comma-3x
+            runner: asius-comma-3x
+    runs-on: [self-hosted, Linux, ARM64, "${{ matrix.runner }}"]
     timeout-minutes: 60
     env:
+      OPENPILOT_ROOT: ${{ github.workspace }}
       PYTHONPATH: ${{ github.workspace }}
       PATH: /usr/local/venv/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-      LD_LIBRARY_PATH: /usr/local/lib
+      LD_LIBRARY_PATH: /usr/local/lib:/opt/qcom-adreno/lib:/opt/qcom-adreno/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu
     steps:
-      - name: Check out master
+      - name: Check out v1
         uses: actions/checkout@v7
         with:
-          fetch-depth: 2
+          ref: v1
+          fetch-depth: 0
           lfs: false
           submodules: recursive
           clean: false
 
+      - name: Merge tested revision
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$GITHUB_SHA"
+          git merge --no-edit "$GITHUB_SHA"
+          git submodule update --init --recursive
+
       - name: Stop installed openpilot
-        run: sudo systemctl stop comma.service
+        run: python openpilot/system/hardware/openpilot_service.py stop
 
       - name: Verify model assets and build
         timeout-minutes: 30
         run: |
+          source launch_env.sh
           mkdir -p "$COMMA_CACHE" /data/model_replay_cache
           ln -sfn msgq_repo/msgq msgq
           ln -sfn opendbc_repo/opendbc opendbc
@@ -56,129 +78,43 @@ jobs:
           python openpilot/system/manager/build.py
 
       - name: Manager device tests
-        run: python openpilot/system/manager/test/test_manager.py
+        run: |
+          source launch_env.sh
+          python openpilot/system/manager/test/test_manager.py
 
       - name: Camera tests
         timeout-minutes: 5
-        run: python openpilot/system/camerad/test/test_camerad.py
+        run: |
+          source launch_env.sh
+          python openpilot/system/camerad/test/test_camerad.py
 
       - name: Hardware encoder tests
         timeout-minutes: 5
         run: |
-          sudo systemd-run --wait --pipe --collect --uid=comma \
-            -p WorkingDirectory="$GITHUB_WORKSPACE" \
-            -p LimitRTPRIO=100 -p LimitNICE=-10 \
-            --setenv=PATH="$PATH" \
-            --setenv=PYTHONPATH="$PYTHONPATH" \
-            --setenv=LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
-            /usr/local/venv/bin/python -u openpilot/system/loggerd/tests/test_encoder.py
+          source launch_env.sh
+          python openpilot/system/loggerd/tests/test_encoder.py
 
       - name: Model runtime and timing
         timeout-minutes: 10
         run: |
-          sudo systemd-run --wait --pipe --collect --uid=comma \
-            -p WorkingDirectory="$GITHUB_WORKSPACE" \
-            -p LimitRTPRIO=100 -p LimitNICE=-10 \
-            --setenv=PATH="$PATH" \
-            --setenv=PYTHONPATH="$PYTHONPATH" \
-            --setenv=COMMA_CACHE="$COMMA_CACHE" \
-            taskset -c 6-7 python -u openpilot/selfdrive/test/process_replay/model_replay.py --timing-only
+          source launch_env.sh
+          python -u openpilot/selfdrive/test/process_replay/model_replay.py --timing-only
+
+      - name: Bluetooth health
+        if: matrix.device == 'asius-v1'
+        run: |
+          bluetoothctl show | grep -q "Powered: yes"
+          python -m unittest openpilot.system.athena.tests.test_ble_protocol openpilot.system.athena.tests.test_ble_pairing openpilot.system.athena.tests.test_bled
 
       - name: Upload test artifacts
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: comma-3x-health-${{ github.run_id }}
+          name: ${{ matrix.device }}-health-${{ github.run_id }}
           if-no-files-found: ignore
           path: model_diff.txt
 
       - name: Restore installed openpilot
         if: always()
-        run: sudo systemctl start comma.service
-
-  asius_v1:
-    name: Asius v1 health
-    runs-on: [self-hosted, Linux, ARM64, asius-dragon-v1]
-    timeout-minutes: 60
-    env:
-      OPENPILOT_ROOT: ${{ github.workspace }}
-      PYTHONPATH: ${{ github.workspace }}
-      LD_LIBRARY_PATH: /opt/qcom-adreno/lib
-    steps:
-      - name: Check out v1
-        uses: actions/checkout@v7
-        with:
-          ref: v1
-          fetch-depth: 0
-          lfs: false
-          submodules: recursive
-          clean: false
-
-      - name: Merge the master revision
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin "$GITHUB_SHA"
-          git merge --no-edit "$GITHUB_SHA"
-          git submodule update --init --recursive
-
-      - name: Check out Vamos health tools
-        uses: actions/checkout@v7
-        with:
-          repository: asiusai/vamos
-          ref: one
-          path: vamos-ci
-          clean: false
-
-      - name: Stop installed openpilot
-        run: sudo sv down openpilot
-
-      - name: Verify model assets and build
-        timeout-minutes: 30
-        run: |
-          source launch_env.sh
-          git lfs pull
-          git lfs fsck --pointers
-          python3 openpilot/system/manager/build.py
-
-      - name: Manager device tests
-        run: |
-          source launch_env.sh
-          python3 openpilot/system/manager/test/test_manager.py
-
-      - name: OS04C10 camera tests
-        timeout-minutes: 5
-        run: |
-          source launch_env.sh
-          python3 openpilot/system/camerad/test/test_camerad.py
-
-      - name: Hardware encoder tests
-        timeout-minutes: 5
-        run: |
-          source launch_env.sh
-          python3 openpilot/system/loggerd/tests/test_encoder.py
-
-      - name: Full Dragon health check
-        timeout-minutes: 10
-        env:
-          DRAGON_HEALTH_MIN_CAMERAS: "3"
-        run: |
-          source launch_env.sh
-          python3 -u vamos-ci/dragon_health.py
-
-      - name: Upload health artifacts
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@v7
-        with:
-          name: asius-v1-health-${{ github.run_id }}
-          if-no-files-found: ignore
-          path: |
-            /tmp/dragon_health
-            /tmp/dragon_health_manager.log
-            model_diff.txt
-
-      - name: Restore installed openpilot
-        if: always()
-        run: sudo sv up openpilot
+        run: python openpilot/system/hardware/openpilot_service.py start
