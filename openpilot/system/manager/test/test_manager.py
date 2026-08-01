@@ -48,12 +48,16 @@ class TestManager(OpenpilotTestCase):
           assert {"camerad_v1", "encoderd_v1", "stream_encoderd_v1"} <= processes.keys()
           assert not {"camerad", "encoderd", "stream_encoderd"} & processes.keys()
           assert processes["camerad_v1"].cmdline == ["./camerad_v1"]
+          assert processes["encoderd_v1"].cmdline == ["./encoderd_v1"]
+          assert processes["stream_encoderd_v1"].cmdline == ["./encoderd_v1", "--stream"]
           assert processes["modeld"].module == "openpilot.selfdrive.modeld.modeld_v1"
           assert processes["dmonitoringmodeld"].module == "openpilot.selfdrive.modeld.dmonitoringmodeld_v1"
         else:
           assert {"camerad", "encoderd", "stream_encoderd"} <= processes.keys()
           assert not {"camerad_v1", "encoderd_v1", "stream_encoderd_v1"} & processes.keys()
           assert processes["camerad"].cmdline == ["./camerad"]
+          assert processes["encoderd"].cmdline == ["./encoderd"]
+          assert processes["stream_encoderd"].cmdline == ["./encoderd", "--stream"]
           assert processes["modeld"].module == "openpilot.selfdrive.modeld.modeld"
           assert processes["dmonitoringmodeld"].module == "openpilot.selfdrive.modeld.dmonitoringmodeld"
     finally:
