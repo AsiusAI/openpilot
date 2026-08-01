@@ -98,7 +98,7 @@ jobs:
         timeout-minutes: 10
         run: |
           source launch_env.sh
-          taskset -c 6-7 python -u openpilot/selfdrive/test/process_replay/model_replay.py --timing-only
+          python -u openpilot/selfdrive/test/process_replay/model_replay.py --timing-only
 
       - name: Bluetooth health
         if: matrix.device == 'asius-v1'
