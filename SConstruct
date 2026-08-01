@@ -12,6 +12,7 @@ from SCons.Defaults import _stripixes
 
 COMMA_HARDWARE = os.path.isfile('/AGNOS')
 ASIUS_HARDWARE = os.path.isfile('/ASIUS')
+V1 = ASIUS_HARDWARE
 
 SCons.Warnings.warningAsException(True)
 
@@ -232,7 +233,7 @@ else:
 np_version = SCons.Script.Value(np.__version__)
 Export('envCython', 'np_version')
 
-Export('env', 'arch', 'acados', 'ffmpeg_libs', 'ASIUS_HARDWARE')
+Export('env', 'arch', 'acados', 'ffmpeg_libs', 'ASIUS_HARDWARE', 'V1')
 
 # Setup cache dir
 cache_dir = '/data/scons_cache' if arch == "comma_arm64" else '/tmp/scons_cache'

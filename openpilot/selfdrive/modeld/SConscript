@@ -15,14 +15,14 @@ CAMERA_CONFIGS = [
   (_os_fisheye.width, _os_fisheye.height),        # mici: 1344x760
 ]
 
-Import('env', 'arch', 'DEVICE_TYPE')
+Import('env', 'arch', 'V1')
 chunker_file = File("#openpilot/common/file_chunker.py")
 lenv = env.Clone()
-v1_compile_env = f"LD_LIBRARY_PATH={os.environ['LD_LIBRARY_PATH']} " if DEVICE_TYPE == "v1" else ""
+v1_compile_env = f"LD_LIBRARY_PATH={os.environ['LD_LIBRARY_PATH']} " if V1 else ""
 v1_gpu_lock = File("models/.v1_gpu_compile.lock").abspath
 
 def serialize_v1_gpu(node):
-  if DEVICE_TYPE == "v1":
+  if V1:
     lenv.SideEffect(v1_gpu_lock, node)
   return node
 
@@ -35,7 +35,7 @@ def estimate_pickle_max_size(onnx_size):
   # the ONNX size. Overestimating only adds an empty trailing chunk.
   return 2.0 * onnx_size + 10 * 1024 * 1024
 
-if DEVICE_TYPE == "v1":
+if V1:
   tg_backend = 'CL'
   tg_flags = ' '.join([
     f'{v1_compile_env}DEV=CL', 'MODEL_DIRECT_IMAGES=1', 'FLOAT16=1',
@@ -80,7 +80,7 @@ tg_devices_node = lenv.Command(
 mac_brew_string = f'HOME={os.path.expanduser("~")}' if arch == 'Darwin' else ''
 
 modeld_dir = Dir("#openpilot/selfdrive/modeld").abspath
-compile_modeld_filename = "compile_modeld_v1.py" if DEVICE_TYPE == "v1" else "compile_modeld.py"
+compile_modeld_filename = "compile_modeld_v1.py" if V1 else "compile_modeld.py"
 compile_modeld_script = [
   File(f"{modeld_dir}/{compile_modeld_filename}"),
   File(f"{modeld_dir}/get_model_metadata.py"),
