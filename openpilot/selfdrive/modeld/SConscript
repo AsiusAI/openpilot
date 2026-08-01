@@ -10,16 +10,20 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.modeld.helpers import TG_INPUT_DEVICES_PATH, chestnut_present, modeld_pkl_path
 
 
-Import('env', 'arch')
+CAMERA_CONFIGS = [
+  (_ar_ox_fisheye.width, _ar_ox_fisheye.height),  # tici: 1928x1208
+  (_os_fisheye.width, _os_fisheye.height),        # mici: 1344x760
+]
+
+Import('env', 'arch', 'V1')
 chunker_file = File("#openpilot/common/file_chunker.py")
 lenv = env.Clone()
-asius = os.path.isfile("/ASIUS")
-asius_compile_env = f"LD_LIBRARY_PATH={os.environ['LD_LIBRARY_PATH']} " if asius else ""
-asius_gpu_lock = File("models/.asius_gpu_compile.lock").abspath
+v1_compile_env = f"LD_LIBRARY_PATH={os.environ['LD_LIBRARY_PATH']} " if V1 else ""
+v1_gpu_lock = File("models/.v1_gpu_compile.lock").abspath
 
-def serialize_asius_gpu(node):
-  if asius:
-    lenv.SideEffect(asius_gpu_lock, node)
+def serialize_v1_gpu(node):
+  if V1:
+    lenv.SideEffect(v1_gpu_lock, node)
   return node
 
 tinygrad_root = env.Dir("#").abspath
@@ -31,10 +35,10 @@ def estimate_pickle_max_size(onnx_size):
   # the ONNX size. Overestimating only adds an empty trailing chunk.
   return 2.0 * onnx_size + 10 * 1024 * 1024
 
-if asius:
+if V1:
   tg_backend = 'CL'
   tg_flags = ' '.join([
-    f'{asius_compile_env}DEV=CL', 'MODEL_DIRECT_IMAGES=1', 'FLOAT16=1',
+    f'{v1_compile_env}DEV=CL', 'MODEL_DIRECT_IMAGES=1', 'FLOAT16=1',
     'MODEL_FUSE_LAYERNORM=1', 'MODEL_FUSE_ATTENTION_LAYERNORM=1',
     'MODEL_FUSE_OUTPUT_HEADS=1', 'MODEL_FUSE_ADJACENT=1',
     'MODEL_VECTORIZE_QKV_WEIGHTS=1',
@@ -76,7 +80,7 @@ tg_devices_node = lenv.Command(
 mac_brew_string = f'HOME={os.path.expanduser("~")}' if arch == 'Darwin' else ''
 
 modeld_dir = Dir("#openpilot/selfdrive/modeld").abspath
-compile_modeld_filename = "compile_modeld_v1.py" if asius else "compile_modeld.py"
+compile_modeld_filename = "compile_modeld_v1.py" if V1 else "compile_modeld.py"
 compile_modeld_script = [
   File(f"{modeld_dir}/{compile_modeld_filename}"),
   File(f"{modeld_dir}/get_model_metadata.py"),
@@ -114,7 +118,7 @@ for chestnut in [False, True] if CHESTNUT else [False]:
   def do_chunk(target, source, env, pkl=target_pkl_path, chunks=chunk_targets):
     chunk_file(pkl, chunks)
   actions = Action(do_compile, "  [USBGPU] $TARGET") if usbgpu else [cmd, Action(do_chunk, "  [CHUNK] $TARGET")]
-  node = serialize_asius_gpu(lenv.Command(
+  node = serialize_v1_gpu(lenv.Command(
     chunk_targets,
     tinygrad_files + compile_modeld_script + driving_onnx_deps + [Value(camera_res_args), Value(chunk_targets), chunker_file],
     actions,
@@ -126,7 +130,7 @@ for chestnut in [False, True] if CHESTNUT else [False]:
 fn = File(f"models/dmonitoring_model").abspath
 script_files = [File(Dir("#openpilot/selfdrive/modeld").File("get_model_metadata.py").abspath)]
 cmd = f'{tg_flags} {mac_brew_string} python3 {Dir("#openpilot/selfdrive/modeld").abspath}/get_model_metadata.py {fn}.onnx'
-serialize_asius_gpu(lenv.Command(fn + "_metadata.pkl", [fn + ".onnx"] + tinygrad_files + script_files + [tg_devices_node], cmd))
+serialize_v1_gpu(lenv.Command(fn + "_metadata.pkl", [fn + ".onnx"] + tinygrad_files + script_files + [tg_devices_node], cmd))
 
 dm_w, dm_h = DM_INPUT_SIZE
 compile_dm_warp_script = [File(f"{modeld_dir}/compile_dm_warp.py")]
@@ -135,7 +139,7 @@ for cam_w, cam_h in camera_configs:
   cmd = (f'{tg_flags} {mac_brew_string} python3 {modeld_dir}/compile_dm_warp.py '
          f'--camera-resolution {cam_w}x{cam_h} --warp-to {dm_w}x{dm_h} '
          f'--output {dm_pkl_path}')
-  serialize_asius_gpu(lenv.Command(dm_pkl_path, tinygrad_files + compile_dm_warp_script + compile_modeld_script + [tg_devices_node], cmd))
+  serialize_v1_gpu(lenv.Command(dm_pkl_path, tinygrad_files + compile_dm_warp_script + compile_modeld_script + [tg_devices_node], cmd))
 
 def tg_compile(flags, model_name):
   pythonpath_string = 'PYTHONPATH="${PYTHONPATH}:' + env.Dir("#tinygrad_repo").abspath + '"'
@@ -152,4 +156,4 @@ def tg_compile(flags, model_name):
      Action(do_chunk, "  [CHUNK] $TARGET")],
   )
 
-serialize_asius_gpu(tg_compile(tg_flags, 'dmonitoring_model'))
+serialize_v1_gpu(tg_compile(tg_flags, 'dmonitoring_model'))

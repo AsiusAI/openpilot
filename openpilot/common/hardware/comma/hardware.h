@@ -22,7 +22,7 @@ public:
       if (stripped.rfind("comma ", 0) == 0) {
         return stripped.substr(6);
       }
-      if (stripped == "asius v1") {
+      if (stripped == "asius v1" || stripped == "Radxa Dragon Q6A") {
         return std::string("v1");
       }
       return stripped;

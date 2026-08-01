@@ -13,7 +13,7 @@ from openpilot.common.api import api_get, get_key_pair
 from openpilot.common.params import Params
 from openpilot.common.spinner import Spinner
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
-from openpilot.common.hardware import ASIUS, HARDWARE, PC
+from openpilot.common.hardware import DEVICE_TYPE, HARDWARE, PC
 from openpilot.common.hardware.hw import Paths
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.athena.identity import dongle_id_from_public_key
@@ -134,7 +134,7 @@ def register_comma(show_spinner=False) -> str | None:
 
 def register(show_spinner=False) -> str | None:
   params = Params()
-  dongle_id = register_asius() if ASIUS else register_comma(show_spinner)
+  dongle_id = register_asius() if DEVICE_TYPE == "v1" else register_comma(show_spinner)
 
   if dongle_id:
     params.put("DongleId", dongle_id, block=True)

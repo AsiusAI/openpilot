@@ -1,15 +1,12 @@
-import os
-
-Import('env', 'arch', 'messaging', 'common', 'visionipc', 'ffmpeg_libs')
+Import('env', 'arch', 'messaging', 'common', 'visionipc', 'ffmpeg_libs', 'ASIUS_HARDWARE')
 
 libs = [common, messaging, visionipc] + ffmpeg_libs + ['pthread', 'm', 'zstd']
 frameworks = []
 
 src = ['logger.cc', 'zstd_writer.cc', 'video_writer.cc', 'encoder/encoder.cc', 'encoder/jpeg_encoder.cc']
-asius = os.path.isfile("/ASIUS")
 if arch == "comma_arm64":
   src += ['clip_encoder.cc', 'encoder/v4l_encoder.cc', 'encoder/v4l_decoder.cc']
-  if asius:
+  if ASIUS_HARDWARE:
     src += ['encoder/ffmpeg_encoder_v1.cc', 'encoder/venus_encoder.cc', '#openpilot/system/hardware/asius/visionbuf_dma.cc']
 else:
   src += ['encoder/ffmpeg_encoder.cc']
@@ -20,5 +17,5 @@ logger_lib = env.Library('logger', src)
 libs.insert(0, logger_lib)
 
 env.Program('loggerd', ['loggerd.cc'], LIBS=libs, FRAMEWORKS=frameworks)
-env.Program('encoderd_v1' if asius else 'encoderd', ['encoderd_v1.cc' if asius else 'encoderd.cc'], LIBS=libs, FRAMEWORKS=frameworks)
+env.Program('encoderd', ['encoderd_v1.cc' if ASIUS_HARDWARE else 'encoderd.cc'], LIBS=libs, FRAMEWORKS=frameworks)
 env.Program('bootlog.cc', LIBS=libs, FRAMEWORKS=frameworks)

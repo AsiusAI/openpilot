@@ -37,8 +37,8 @@ class TestRegistration(OpenpilotTestCase):
 
     self.priv_key = persist_dir / "id_ed25519"
     self.pub_key = persist_dir / "id_ed25519.pub"
-    self.enterContext(mock.patch.object(api, "ASIUS", True))
-    self.enterContext(mock.patch.object(registration, "ASIUS", True))
+    self.enterContext(mock.patch.object(api, "DEVICE_TYPE", "v1"))
+    self.enterContext(mock.patch.object(registration, "DEVICE_TYPE", "v1"))
 
   def _generate_keys(self) -> str:
     key = ed25519.Ed25519PrivateKey.generate()
@@ -98,8 +98,8 @@ class TestCommaRegistration(OpenpilotTestCase):
 
     persist_root = Path(self.enterContext(tempfile.TemporaryDirectory())) / "persist"
     self.enterContext(mock.patch.object(Paths, "persist_root", staticmethod(lambda: str(persist_root))))
-    self.enterContext(mock.patch.object(api, "ASIUS", False))
-    self.enterContext(mock.patch.object(registration, "ASIUS", False))
+    self.enterContext(mock.patch.object(api, "DEVICE_TYPE", "tici"))
+    self.enterContext(mock.patch.object(registration, "DEVICE_TYPE", "tici"))
 
     persist_dir = Path(Paths.persist_root()) / "comma"
     persist_dir.mkdir(parents=True, exist_ok=True)

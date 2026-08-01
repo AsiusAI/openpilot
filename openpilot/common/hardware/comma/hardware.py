@@ -80,6 +80,8 @@ def get_device_type():
     return device_type
   with open("/sys/firmware/devicetree/base/model") as f:
     model = f.read().strip('\x00')
+  if model == "Radxa Dragon Q6A":
+    return "v1"
   if model.startswith(("comma ", "asius ")):
     return model[6:]
   return model

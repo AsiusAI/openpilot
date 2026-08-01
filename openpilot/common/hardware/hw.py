@@ -2,7 +2,7 @@ import os
 import platform
 from pathlib import Path
 
-from openpilot.common.hardware import PC
+from openpilot.common.hardware import DEVICE_TYPE, PC
 
 DEFAULT_DOWNLOAD_CACHE_ROOT = "/tmp/comma_download_cache"
 
@@ -41,7 +41,7 @@ class Paths:
   def persist_root() -> str:
     if PC:
       return os.path.join(Paths.comma_home(), "persist")
-    elif os.path.isfile("/ASIUS"):
+    elif DEVICE_TYPE == "v1":
       return "/data/persist/"
     else:
       return "/persist/"

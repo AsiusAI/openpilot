@@ -61,7 +61,7 @@ jobs:
           git submodule update --init --recursive
 
       - name: Stop installed openpilot
-        run: python openpilot/system/hardware/openpilot_service.py stop
+        run: sudo -E python openpilot/system/hardware/openpilot_service.py stop
 
       - name: Verify model assets and build
         timeout-minutes: 30
@@ -98,7 +98,7 @@ jobs:
         timeout-minutes: 10
         run: |
           source launch_env.sh
-          python -u openpilot/selfdrive/test/process_replay/model_replay.py --timing-only
+          taskset -c 6-7 python -u openpilot/selfdrive/test/process_replay/model_replay.py --timing-only
 
       - name: Bluetooth health
         if: matrix.device == 'asius-v1'
@@ -117,4 +117,4 @@ jobs:
 
       - name: Restore installed openpilot
         if: always()
-        run: python openpilot/system/hardware/openpilot_service.py start
+        run: sudo -E python openpilot/system/hardware/openpilot_service.py start

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import atexit
 import os
 import pickle
 import sys
@@ -13,7 +12,7 @@ import numpy as np
 from openpilot.common.utils import tabulate
 
 from openpilot.common.git import get_commit
-from openpilot.common.hardware import ASIUS, PC
+from openpilot.common.hardware import PC
 from openpilot.tools.lib.openpilotci import get_url
 from openpilot.selfdrive.test.process_replay.compare_logs import compare_logs, format_diff
 from openpilot.selfdrive.test.process_replay.process_replay import get_process_config, replay_process
@@ -226,11 +225,6 @@ def get_frames():
   return frs
 
 if __name__ == "__main__":
-  if ASIUS:
-    from openpilot.common.hardware.tici.hardware import set_dragon_gpu_power_save
-    set_dragon_gpu_power_save(False)
-    atexit.register(set_dragon_gpu_power_save, True)
-
   timing_only = "--timing-only" in sys.argv
   update = "--update" in sys.argv or (os.getenv("GIT_BRANCH", "") == 'master')
   replay_dir = os.path.dirname(os.path.abspath(__file__))
@@ -264,28 +258,26 @@ if __name__ == "__main__":
         'driverStateV2.modelExecutionTime',
         'driverStateV2.gpuExecutionTime'
       ]
-      if PC or ASIUS:
-        # TODO We ignore whole bunch so we can compare important stuff
-        # like posenet with reasonable tolerance
-        ignore += ['modelV2.acceleration.x',
-                   'modelV2.position.x',
-                   'modelV2.position.xStd',
-                   'modelV2.position.y',
-                   'modelV2.position.yStd',
-                   'modelV2.position.z',
-                   'modelV2.position.zStd',
-                   'drivingModelData.path.xCoefficients',]
-        for i in range(3):
-          for field in ('x', 'y', 'v', 'a'):
-            ignore.append(f'modelV2.leadsV3.{i}.{field}')
-            ignore.append(f'modelV2.leadsV3.{i}.{field}Std')
-        for i in range(4):
-          for field in ('x', 'y', 'z', 't'):
-            ignore.append(f'modelV2.laneLines.{i}.{field}')
-        for i in range(2):
-          for field in ('x', 'y', 'z', 't'):
-            ignore.append(f'modelV2.roadEdges.{i}.{field}')
-      tolerance = .3 if PC or ASIUS else None
+      # Keep model replay comparison identical across PC and hardware.
+      ignore += ['modelV2.acceleration.x',
+                 'modelV2.position.x',
+                 'modelV2.position.xStd',
+                 'modelV2.position.y',
+                 'modelV2.position.yStd',
+                 'modelV2.position.z',
+                 'modelV2.position.zStd',
+                 'drivingModelData.path.xCoefficients',]
+      for i in range(3):
+        for field in ('x', 'y', 'v', 'a'):
+          ignore.append(f'modelV2.leadsV3.{i}.{field}')
+          ignore.append(f'modelV2.leadsV3.{i}.{field}Std')
+      for i in range(4):
+        for field in ('x', 'y', 'z', 't'):
+          ignore.append(f'modelV2.laneLines.{i}.{field}')
+      for i in range(2):
+        for field in ('x', 'y', 'z', 't'):
+          ignore.append(f'modelV2.roadEdges.{i}.{field}')
+      tolerance = .3
       results: Any = {TEST_ROUTE: {}}
       log_paths: Any = {TEST_ROUTE: {"models": {'ref': log_fn, 'new': log_fn}}}
       results[TEST_ROUTE]["models"] = compare_logs(cmp_log, log_msgs, tolerance=tolerance, ignore_fields=ignore)

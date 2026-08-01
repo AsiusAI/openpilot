@@ -30,7 +30,6 @@ REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
 TESTING_CLOSET = "TESTING_CLOSET" in os.environ
 NO_DCAM = os.getenv("NO_DCAM") == "1"
-NO_IMU = os.getenv("NO_IMU") == "1"
 
 LONGITUDINAL_PERSONALITY_MAP = {v: k for k, v in log.LongitudinalPersonality.schema.enumerants.items()}
 
@@ -78,7 +77,7 @@ class SelfdriveD:
 
     self.gps_location_service = get_gps_location_service(self.params)
     self.gps_packets = [self.gps_location_service]
-    self.sensor_packets = [] if NO_IMU else ["accelerometer", "gyroscope"]
+    self.sensor_packets = ["accelerometer", "gyroscope"]
     self.camera_packets = ["roadCameraState", "wideRoadCameraState"] if NO_DCAM else \
                           ["roadCameraState", "driverCameraState", "wideRoadCameraState"]
 

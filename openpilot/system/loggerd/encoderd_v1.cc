@@ -3,11 +3,11 @@
 #include "system/loggerd/loggerd.h"
 #include "system/loggerd/encoder/jpeg_encoder.h"
 
-#if defined(__TICI__) && !defined(__ASIUS__)
+#if defined(__TICI__) && !defined(__V1__)
 #include "system/loggerd/encoder/v4l_encoder.h"
 #else
 #include "system/loggerd/encoder/ffmpeg_encoder.h"
-#ifdef __ASIUS__
+#ifdef __V1__
 #include "system/loggerd/encoder/venus_encoder.h"
 #endif
 #endif
@@ -65,7 +65,7 @@ void encoder_thread(EncoderdState *s, const LogCameraInfo &cam_info) {
   std::vector<std::unique_ptr<VideoEncoder>> encoders;
 
   const bool live_encoder = !cam_info.encoder_infos.empty() && cam_info.encoder_infos[0].is_live;
-#ifdef __ASIUS__
+#ifdef __V1__
   VisionIpcClient vipc_client = VisionIpcClient("camerad", cam_info.stream_type, live_encoder);
 #else
   VisionIpcClient vipc_client = VisionIpcClient("camerad", cam_info.stream_type, false);
@@ -89,9 +89,9 @@ void encoder_thread(EncoderdState *s, const LogCameraInfo &cam_info) {
       assert(buf_info.width > 0 && buf_info.height > 0);
 
       for (const auto &encoder_info : cam_info.encoder_infos) {
-#if defined(__TICI__) && !defined(__ASIUS__)
+#if defined(__TICI__) && !defined(__V1__)
         auto e = std::make_unique<V4LEncoder>(encoder_info, buf_info.width, buf_info.height);
-#elif defined(__ASIUS__)
+#elif defined(__V1__)
         std::unique_ptr<VideoEncoder> e;
         auto venus = std::make_unique<VenusEncoder>(encoder_info, buf_info.width, buf_info.height,
                                                     buf_info.stride, buf_info.uv_offset);
@@ -208,14 +208,14 @@ int main(int argc, char* argv[]) {
   const bool stream_mode = argc > 1 && std::string(argv[1]) == "--stream";
   if (!Hardware::PC()) {
     int ret;
-#ifdef __ASIUS__
+#ifdef __V1__
     // Keep livestream capture ahead of recording's synchronous qcamera encode work.
     ret = util::set_realtime_priority(stream_mode ? 53 : 52);
 #else
     ret = util::set_realtime_priority(52);
 #endif
     assert(ret == 0);
-#ifdef __ASIUS__
+#ifdef __V1__
     ret = util::set_core_affinity({3, 4, 5});
 #else
     ret = util::set_core_affinity({3});

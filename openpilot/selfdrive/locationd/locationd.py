@@ -16,8 +16,6 @@ from openpilot.selfdrive.locationd.helpers import rotate_std
 from openpilot.selfdrive.locationd.models.pose_kf import PoseKalman, States
 from openpilot.selfdrive.locationd.models.constants import ObservationKind, GENERATED_DIR
 
-NO_IMU = os.environ.get("NO_IMU") == "1"
-
 ACCEL_SANITY_CHECK = 100.0  # m/s^2
 ROTATION_SANITY_CHECK = 10.0  # rad/s
 TRANS_SANITY_CHECK = 200.0  # m/s
@@ -150,25 +148,6 @@ class LocationEstimator:
     elif which == "carState":
       self.car_speed = abs(msg.vEgo)
 
-      if NO_IMU:
-        accel_meas = np.array([msg.aEgo, 0, -9.81])
-        if np.linalg.norm(accel_meas) >= ACCEL_SANITY_CHECK:
-          return HandleLogResult.INPUT_INVALID
-        acc_res = self.kf.predict_and_observe(t, ObservationKind.PHONE_ACCEL, accel_meas)
-        if acc_res is not None:
-          _, _, _, _, _, _, (acc_err,), _, _ = acc_res
-          self.observation_errors[ObservationKind.PHONE_ACCEL] = np.array(acc_err)
-          self.observations[ObservationKind.PHONE_ACCEL] = accel_meas
-
-        gyro_meas = np.array([0, 0, -msg.yawRate])
-        if np.linalg.norm(gyro_meas) >= ROTATION_SANITY_CHECK:
-          return HandleLogResult.INPUT_INVALID
-        gyro_res = self.kf.predict_and_observe(t, ObservationKind.PHONE_GYRO, gyro_meas)
-        if gyro_res is not None:
-          _, new_x, _, new_P, _, _, (gyro_err,), _, _ = gyro_res
-          self.observation_errors[ObservationKind.PHONE_GYRO] = np.array(gyro_err)
-          self.observations[ObservationKind.PHONE_GYRO] = gyro_meas
-
     elif which == "liveCalibration":
       # Note that we use this message during calibration
       if len(msg.rpyCalib) > 0:
@@ -268,9 +247,6 @@ class LocationEstimator:
 
 
 def sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, sensor_alive, simulation):
-  if (NO_IMU):
-    return True
-
   cur_time = time.monotonic()
   for which, msgs in [("accelerometer", acc_msgs), ("gyroscope", gyro_msgs)]:
     if len(msgs) > 0:
@@ -302,7 +278,7 @@ def main():
   estimator = LocationEstimator(DEBUG)
 
   filter_initialized = False
-  critcal_services = ["cameraOdometry"] if NO_IMU else ["accelerometer", "gyroscope", "cameraOdometry"]
+  critcal_services = ["accelerometer", "gyroscope", "cameraOdometry"]
   observation_input_invalid = defaultdict(int)
 
   input_invalid_limit = {s: round(INPUT_INVALID_LIMIT * (SERVICE_LIST[s].frequency / 20.)) for s in critcal_services}
