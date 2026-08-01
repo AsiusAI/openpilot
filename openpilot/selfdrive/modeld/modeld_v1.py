@@ -233,7 +233,9 @@ class ModelState:
       self.full_frames[key] = self.cl_uploaded_frames[key]
     if transforms is not None:
       self.prewarped = self.cl_warp(self.full_frames['img'], self.full_frames['big_img'], transforms)
-    Device[self.WARP_DEV].synchronize()
+    status = cl.clFlush(Device[self.WARP_DEV].queue)
+    if status != 0:
+      raise RuntimeError(f"failed to flush preloaded OpenCL work: status={status}")
 
   def run(self, bufs: dict[str, VisionBuf], transforms: dict[str, np.ndarray],
           inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray] | None:
