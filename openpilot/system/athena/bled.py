@@ -63,8 +63,8 @@ ACTIVE_PEER_SECONDS = 45.
 LIVE_STATE_INTERVAL_SECONDS = 1.
 NOTIFICATION_FRAME_DELAY_SECONDS = 0.004
 REGISTER_RETRY_SECONDS = 3.
-ASIUS_DEVICE_TYPE = "asius-v1"
-ASIUS_DEVICE_NAME = "Asius v1"
+DEVICE_TYPE = "asius-v1"
+DEVICE_NAME = "Asius v1"
 
 DBusStrList = Annotated[list[str], DBusSignature("as")]
 
@@ -175,7 +175,7 @@ class Advertisement(ServiceInterface):
 
   @dbus_property(access=PropertyAccess.READ)
   def LocalName(self) -> DBusStr:
-    return ASIUS_DEVICE_NAME
+    return DEVICE_NAME
 
   @dbus_property(access=PropertyAccess.READ)
   def Discoverable(self) -> DBusBool:
@@ -258,8 +258,8 @@ class BlePeerEngine:
       "type": "hello",
       "v": 1,
       "publicKey": self.dongle_id,
-      "deviceType": ASIUS_DEVICE_TYPE,
-      "name": ASIUS_DEVICE_NAME,
+      "deviceType": DEVICE_TYPE,
+      "name": DEVICE_NAME,
       "maxFrameBytes": MAX_FRAME_BYTES,
     }
     await self.tx.send_text(json.dumps(response, separators=(",", ":")), initial=True)
@@ -332,7 +332,7 @@ class BlePeerEngine:
       sent = await self.send_body(sender, {
         "type": "pair-response",
         "publicKey": self.dongle_id,
-        "device-type": ASIUS_DEVICE_TYPE,
+        "device-type": DEVICE_TYPE,
         "aclEpoch": int(load_authorized_peers()[sender].get("aclEpoch", 0)),
       })
       approved = get_ble_pairing()
@@ -383,7 +383,7 @@ class BlePeerEngine:
     sent = await self.send_body(sender, {
       "type": "pair-response",
       "publicKey": self.dongle_id,
-      "device-type": ASIUS_DEVICE_TYPE,
+      "device-type": DEVICE_TYPE,
       "aclEpoch": approved["aclEpoch"],
     })
     if sent:
@@ -460,7 +460,7 @@ async def set_adapter_property(bus: MessageBus, adapter: str, name: str, value: 
 
 async def register_bluez(bus: MessageBus, adapter: str) -> None:
   await set_adapter_property(bus, adapter, "Powered", Variant("b", True))
-  await set_adapter_property(bus, adapter, "Alias", Variant("s", ASIUS_DEVICE_NAME))
+  await set_adapter_property(bus, adapter, "Alias", Variant("s", DEVICE_NAME))
   await set_adapter_property(bus, adapter, "Pairable", Variant("b", False))
   await checked_call(bus, method_call(adapter, GATT_MANAGER, "RegisterApplication", "oa{sv}", [APPLICATION_PATH, {}]))
   await checked_call(bus, method_call(adapter, ADVERTISING_MANAGER, "RegisterAdvertisement", "oa{sv}", [ADVERTISEMENT_PATH, {}]))

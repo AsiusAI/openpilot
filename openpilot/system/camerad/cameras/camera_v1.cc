@@ -12,13 +12,11 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cctype>
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
-#include <iterator>
 #include <string>
 #include <vector>
 
@@ -34,8 +32,6 @@
 ExitHandler do_exit;
 
 const bool env_debug_frames = getenv("DEBUG_FRAMES") != nullptr;
-
-static int getenv_int_clamped(const char *name, int default_value, int min_value, int max_value);
 
 struct OneCamRoute {
   int csiphy;
@@ -106,9 +102,6 @@ static OneCamConfig resolve_cam_config(int media_fd, int cam_idx) {
   cfg.rdi_video_dev = find_v4l_dev("video", util::string_format("msm_vfe%d_video0", r->rdi_vfe).c_str());
 
   int pix_vfe = r->preferred_pix_vfe;
-  std::string pix_env_name = util::string_format("ASIUS_CAM%d_PIX_VFE", cam_idx);
-  const char *pix_env = getenv(pix_env_name.c_str());
-  if (pix_env != nullptr && pix_env[0] != '\0') pix_vfe = atoi(pix_env);
   auto resolve_pix = [&](int vfe) {
     if (vfe < 0) return false;
     cfg.vfe_pix_entity = find_media_entity(media_fd, util::string_format("msm_vfe%d_pix", vfe).c_str());
@@ -145,13 +138,6 @@ struct OneSensorWriteRegsCmd {
 struct VfeRegWrite {
   uint32_t offset;
   uint32_t value;
-};
-
-struct VfeDmiUpload {
-  uint32_t dmi_cfg_offset;
-  uint8_t ram_select;
-  std::vector<uint32_t> data;
-  std::string source;
 };
 
 struct VfeWriteRegsCmd {
@@ -212,42 +198,16 @@ static std::unique_ptr<SensorInfo> make_one_sensor() {
 }
 
 static uint32_t one_media_bus_code() {
-  return getenv("ASIUS_OS04_RAW12") != nullptr ? MEDIA_BUS_FMT_SBGGR12_1X12 : MEDIA_BUS_FMT_SBGGR10_1X10;
-}
-
-static bool one_uses_csid_tpg() {
-  return getenv("ASIUS_CSID_TPG") != nullptr;
-}
-
-static bool one_uses_vfe_pix() {
-  return true;
-}
-
-static bool one_uses_pix_v4l2() {
-  return getenv("ASIUS_CAM_PIX_IOCTL") == nullptr;
+  return MEDIA_BUS_FMT_SBGGR10_1X10;
 }
 
 static bool one_has_dma_heap() {
   return access("/dev/dma_heap/system", R_OK | W_OK) == 0;
 }
 
-static bool one_ae_disabled() {
-  return getenv("ASIUS_CAM_DISABLE_AE") != nullptr;
-}
-
-static int one_ae_interval() {
-  // The AE controller's three-frame EV history assumes one update per frame.
-  return getenv_int_clamped("ASIUS_CAM_AE_INTERVAL", 1, 1, 120);
-}
-
-static int one_pix_csid_source_pad() {
-  const char *pad = getenv("ASIUS_CAM_PIX_CSID_SRC_PAD");
-  if (pad != nullptr && pad[0] != '\0') return std::clamp(atoi(pad), 1, 4);
-
-  // The mainline CAMSS graph links VFE_LINE_PIX from CSID source pad 4.
-  // The CSID-gen2 driver still programs that PIX/IPP path for sensor VC0.
-  return 4;
-}
+// The mainline CAMSS graph links VFE_LINE_PIX from CSID source pad 4.
+// The CSID-gen2 driver still programs that PIX/IPP path for sensor VC0.
+static constexpr int ONE_PIX_CSID_SOURCE_PAD = 4;
 
 static constexpr uint32_t ONE_SENSOR_DELAY_MS = 0xffffffffU;
 static constexpr uint32_t OS04_RAW10_20FPS_VTS = 0x1275;
@@ -548,13 +508,7 @@ static const std::vector<i2c_random_wr_payload> &os04_default_init_regs() {
   return regs;
 }
 
-static int one_csid_tpg_mode() {
-  const char *mode = getenv("ASIUS_CSID_TPG");
-  if (mode == nullptr || mode[0] == '\0') return 1;
-  return std::max(1, atoi(mode));
-}
-
-static void set_csid_tpg_ctrl(int csid_subdev, int mode, int cam_idx, const char *action) {
+static void disable_csid_tpg(int csid_subdev, int cam_idx) {
   if (csid_subdev < 0) return;
 
   int fd = open(util::string_format("/dev/v4l-subdev%d", csid_subdev).c_str(), O_RDWR);
@@ -562,12 +516,11 @@ static void set_csid_tpg_ctrl(int csid_subdev, int mode, int cam_idx, const char
 
   struct v4l2_control ctrl = {};
   ctrl.id = V4L2_CID_TEST_PATTERN;
-  ctrl.value = mode;
+  ctrl.value = 0;
   if (ioctl(fd, VIDIOC_S_CTRL, &ctrl) != 0) {
-    LOGE("cam %d: %s CSID TPG mode %d failed: %d (%s)",
-         cam_idx, action, mode, errno, strerror(errno));
+    LOGE("cam %d: disabling CSID TPG failed: %d (%s)", cam_idx, errno, strerror(errno));
   } else {
-    LOG("cam %d: %s CSID TPG mode %d", cam_idx, action, mode);
+    LOG("cam %d: disabled CSID TPG", cam_idx);
   }
 
   close(fd);
@@ -626,229 +579,7 @@ static bool write_sensor_regs(int sensor_fd, const std::vector<i2c_random_wr_pay
   return true;
 }
 
-static std::string trim_copy(const std::string &s) {
-  size_t first = 0;
-  while (first < s.size() && std::isspace((unsigned char)s[first])) first++;
-  size_t last = s.size();
-  while (last > first && std::isspace((unsigned char)s[last - 1])) last--;
-  return s.substr(first, last - first);
-}
-
 static int one_physical_cam_num(int camera_num);
-static const char *one_cam_env_value(const char *base_name, int camera_num);
-static float getenv_cam_float_clamped(const char *base_name, int camera_num, float default_value, float min_value, float max_value);
-static int getenv_cam_int_clamped(const char *base_name, int camera_num, int default_value, int min_value, int max_value);
-
-static std::vector<i2c_random_wr_payload> parse_sensor_reg_spec(const std::string &spec, const char *source, int cam_idx) {
-  std::vector<i2c_random_wr_payload> regs;
-
-  size_t start = 0;
-  while (start < spec.size()) {
-    size_t end = spec.find_first_of(",;\n\r", start);
-    std::string token = spec.substr(start, end == std::string::npos ? std::string::npos : end - start);
-    size_t comment = token.find('#');
-    if (comment != std::string::npos) token.resize(comment);
-    token = trim_copy(token);
-    if (token.empty()) {
-      if (end == std::string::npos) break;
-      start = end + 1;
-      continue;
-    }
-
-    size_t sep = token.find('=');
-    if (sep == std::string::npos) sep = token.find(':');
-    if (sep == std::string::npos) {
-      LOGE("cam %d: ignoring malformed %s token '%s'", cam_idx, source, token.c_str());
-    } else {
-      char *addr_end = nullptr;
-      char *data_end = nullptr;
-      std::string addr_s = trim_copy(token.substr(0, sep));
-      std::string data_s = trim_copy(token.substr(sep + 1));
-      std::string addr_l = addr_s;
-      std::transform(addr_l.begin(), addr_l.end(), addr_l.begin(),
-                     [](unsigned char c) { return std::tolower(c); });
-      if (addr_l == "delay" || addr_l == "delay_ms" || addr_l == "msleep" || addr_l == "sleep") {
-        unsigned long delay_ms = strtoul(data_s.c_str(), &data_end, 0);
-        if ((data_end && *data_end) || delay_ms > 10000) {
-          LOGE("cam %d: ignoring invalid %s token '%s'", cam_idx, source, token.c_str());
-        } else {
-          regs.push_back({ONE_SENSOR_DELAY_MS, (uint32_t)delay_ms});
-        }
-        if (end == std::string::npos) break;
-        start = end + 1;
-        continue;
-      }
-
-      unsigned long addr = strtoul(addr_s.c_str(), &addr_end, 0);
-      unsigned long data = strtoul(data_s.c_str(), &data_end, 0);
-      if ((addr_end && *addr_end) || (data_end && *data_end) || addr > 0xffff || data > 0xff) {
-        LOGE("cam %d: ignoring invalid %s token '%s'", cam_idx, source, token.c_str());
-      } else {
-        regs.push_back({(uint32_t)addr, (uint32_t)data});
-      }
-    }
-    if (end == std::string::npos) break;
-    start = end + 1;
-  }
-  return regs;
-}
-
-static std::vector<i2c_random_wr_payload> parse_sensor_reg_overrides(const char *env_name, int cam_idx) {
-  const char *env = getenv(env_name);
-  if (env == nullptr || env[0] == '\0') return {};
-  return parse_sensor_reg_spec(env, env_name, cam_idx);
-}
-
-static std::vector<i2c_random_wr_payload> parse_sensor_reg_path(const char *path, const char *source, int cam_idx) {
-  if (path == nullptr || path[0] == '\0') return {};
-
-  std::string spec = util::read_file(path);
-  if (spec.empty()) {
-    LOGE("cam %d: %s '%s' is empty or unreadable", cam_idx, source, path);
-    return {};
-  }
-
-  auto regs = parse_sensor_reg_spec(spec, source, cam_idx);
-  LOG("cam %d: loaded %zu regs from %s '%s'", cam_idx, regs.size(), source, path);
-  return regs;
-}
-
-static bool write_sensor_reg_overrides(int sensor_fd, const char *env_name, const char *name, int cam_idx) {
-  std::vector<i2c_random_wr_payload> regs = parse_sensor_reg_overrides(env_name, cam_idx);
-  return write_sensor_regs(sensor_fd, regs, name, cam_idx);
-}
-
-static bool write_sensor_reg_path(int sensor_fd, const char *path, const char *source, const char *name, int cam_idx) {
-  std::vector<i2c_random_wr_payload> regs = parse_sensor_reg_path(path, source, cam_idx);
-  return !regs.empty() && write_sensor_regs(sensor_fd, regs, name, cam_idx);
-}
-
-static std::vector<VfeRegWrite> parse_vfe_reg_spec(const std::string &spec, const char *source, int cam_idx) {
-  std::vector<VfeRegWrite> regs;
-
-  size_t start = 0;
-  while (start < spec.size()) {
-    size_t end = spec.find_first_of(",;\n\r", start);
-    std::string token = spec.substr(start, end == std::string::npos ? std::string::npos : end - start);
-    size_t comment = token.find('#');
-    if (comment != std::string::npos) token.resize(comment);
-    token = trim_copy(token);
-    if (token.empty()) {
-      if (end == std::string::npos) break;
-      start = end + 1;
-      continue;
-    }
-
-    size_t sep = token.find('=');
-    if (sep == std::string::npos) sep = token.find(':');
-    if (sep == std::string::npos) {
-      LOGE("cam %d: ignoring malformed %s token '%s'", cam_idx, source, token.c_str());
-    } else {
-      char *offset_end = nullptr;
-      char *value_end = nullptr;
-      std::string offset_s = trim_copy(token.substr(0, sep));
-      std::string value_s = trim_copy(token.substr(sep + 1));
-      unsigned long offset = strtoul(offset_s.c_str(), &offset_end, 0);
-      unsigned long value = strtoul(value_s.c_str(), &value_end, 0);
-      if ((offset_end && *offset_end) || (value_end && *value_end) || offset > 0x2ffc || value > 0xffffffffUL || (offset & 3)) {
-        LOGE("cam %d: ignoring invalid %s token '%s'", cam_idx, source, token.c_str());
-      } else {
-        regs.push_back({(uint32_t)offset, (uint32_t)value});
-      }
-    }
-    if (end == std::string::npos) break;
-    start = end + 1;
-  }
-  return regs;
-}
-
-static std::vector<VfeDmiUpload> parse_vfe_dmi_spec(const std::string &spec, const char *source, int cam_idx) {
-  std::vector<VfeDmiUpload> uploads;
-
-  size_t start = 0;
-  while (start < spec.size()) {
-    size_t end = spec.find_first_of(";\n\r", start);
-    std::string token = spec.substr(start, end == std::string::npos ? std::string::npos : end - start);
-    size_t comment = token.find('#');
-    if (comment != std::string::npos) token.resize(comment);
-    token = trim_copy(token);
-    if (token.empty()) {
-      if (end == std::string::npos) break;
-      start = end + 1;
-      continue;
-    }
-
-    size_t sep = token.find('=');
-    if (sep == std::string::npos) sep = token.find(':');
-    if (sep == std::string::npos) {
-      LOGE("cam %d: ignoring malformed %s DMI token '%s'", cam_idx, source, token.c_str());
-      if (end == std::string::npos) break;
-      start = end + 1;
-      continue;
-    }
-
-    std::string target_s = trim_copy(token.substr(0, sep));
-    std::string values_s = trim_copy(token.substr(sep + 1));
-    uint32_t dmi_cfg_offset = 0xc24;
-    unsigned long ram_select = 0;
-    char *cfg_end = nullptr;
-    char *ram_end = nullptr;
-
-    size_t target_sep = target_s.find(':');
-    if (target_sep != std::string::npos) {
-      std::string cfg_s = trim_copy(target_s.substr(0, target_sep));
-      std::string ram_s = trim_copy(target_s.substr(target_sep + 1));
-      unsigned long cfg = strtoul(cfg_s.c_str(), &cfg_end, 0);
-      ram_select = strtoul(ram_s.c_str(), &ram_end, 0);
-      if ((cfg_end && *cfg_end) || cfg > 0x2ffc || (cfg & 3)) {
-        LOGE("cam %d: ignoring invalid %s DMI target '%s'", cam_idx, source, target_s.c_str());
-        if (end == std::string::npos) break;
-        start = end + 1;
-        continue;
-      }
-      dmi_cfg_offset = (uint32_t)cfg;
-    } else {
-      ram_select = strtoul(target_s.c_str(), &ram_end, 0);
-    }
-
-    if ((ram_end && *ram_end) || ram_select > 0xff) {
-      LOGE("cam %d: ignoring invalid %s DMI RAM '%s'", cam_idx, source, target_s.c_str());
-      if (end == std::string::npos) break;
-      start = end + 1;
-      continue;
-    }
-
-    std::replace(values_s.begin(), values_s.end(), ',', ' ');
-    std::vector<uint32_t> values;
-    size_t value_start = 0;
-    while (value_start < values_s.size()) {
-      value_start = values_s.find_first_not_of(" \t", value_start);
-      if (value_start == std::string::npos) break;
-      size_t value_end = values_s.find_first_of(" \t", value_start);
-      std::string value_s = values_s.substr(value_start, value_end == std::string::npos ? std::string::npos : value_end - value_start);
-      char *value_parse_end = nullptr;
-      unsigned long value = strtoul(value_s.c_str(), &value_parse_end, 0);
-      if ((value_parse_end && *value_parse_end) || value > 0xffffffffUL) {
-        LOGE("cam %d: ignoring invalid %s DMI value '%s'", cam_idx, source, value_s.c_str());
-        values.clear();
-        break;
-      }
-      values.push_back((uint32_t)value);
-      if (value_end == std::string::npos) break;
-      value_start = value_end + 1;
-    }
-
-    if (values.empty()) {
-      LOGE("cam %d: ignoring empty %s DMI upload '%s'", cam_idx, source, token.c_str());
-    } else {
-      uploads.push_back({dmi_cfg_offset, (uint8_t)ram_select, std::move(values), source});
-    }
-
-    if (end == std::string::npos) break;
-    start = end + 1;
-  }
-  return uploads;
-}
 
 struct Os04VfeWbRegs {
   bool valid = false;
@@ -871,11 +602,6 @@ static Os04VfeWbRegs default_os04_vfe_wb_regs(int cam_idx) {
       break;
     default:
       break;
-  }
-  if (wb.valid) {
-    wb.blue = getenv_cam_int_clamped("ASIUS_CAM_WB_BLUE", cam_idx, wb.blue, 0x40, 0x400);
-    wb.green = getenv_cam_int_clamped("ASIUS_CAM_WB_GREEN", cam_idx, wb.green, 0x40, 0x400);
-    wb.red = getenv_cam_int_clamped("ASIUS_CAM_WB_RED", cam_idx, wb.red, 0x40, 0x400);
   }
   return wb;
 }
@@ -956,27 +682,7 @@ static std::vector<VfeRegWrite> os04_vfe_ccm_reg_writes() {
   return regs;
 }
 
-static std::vector<VfeRegWrite> os04_vfe_vignetting_config_reg_writes() {
-  return {
-    {0x6bc, 0x0b3c0000},
-    {0x6c0, 0x00670067},
-    {0x6c4, 0xd3b1300c},
-    {0x6c8, 0x13b1300c},
-    {0x6d8, 0xec4e4000},
-    {0x6dc, 0x0100c003},
-  };
-}
-
-static bool default_os04_vfe_rolloff_enabled(int cam_idx) {
-  // The provisional OS04 rolloff table is not lens/module calibrated. It
-  // reduced CAM3 noise in an earlier bench setup, but later captures showed
-  // large green/magenta spatial drift. Keep rolloff opt-in until it is tuned
-  // against real flat-field captures for the final lens stack.
-  return false;
-}
-
 static std::vector<VfeRegWrite> default_os04_vfe_tuning_regs(int cam_idx) {
-  if (getenv("ASIUS_CAM_DISABLE_DEFAULT_VFE_TUNING") != nullptr) return {};
   // Stream start resets CORE_CFG; restore the CamThink module's RGGB phase.
   std::vector<VfeRegWrite> regs = {{0x050, 0x00000000}};
   std::vector<VfeRegWrite> wb = os04_vfe_wb_reg_writes(default_os04_vfe_wb_regs(cam_idx));
@@ -986,215 +692,21 @@ static std::vector<VfeRegWrite> default_os04_vfe_tuning_regs(int cam_idx) {
   return regs;
 }
 
-static std::vector<VfeRegWrite> parse_cam_vfe_reg_overrides(const char *env_name, int cam_idx) {
-  std::vector<VfeRegWrite> regs;
-
-  auto append_env = [&](const std::string &name) {
-    const char *env = getenv(name.c_str());
-    if (env == nullptr || env[0] == '\0') return;
-    auto parsed = parse_vfe_reg_spec(env, name.c_str(), cam_idx);
-    regs.insert(regs.end(), parsed.begin(), parsed.end());
-  };
-
-  const char *suffix = env_name;
-  constexpr const char *prefix = "ASIUS_CAM_";
-  constexpr size_t prefix_len = 10;
-  if (strncmp(env_name, prefix, prefix_len) == 0) suffix = env_name + prefix_len;
-
-  append_env(env_name);
-  append_env(util::string_format("ASIUS_CAM%d_%s", cam_idx, suffix));
-  append_env(util::string_format("ASIUS_PHYS_CAM%d_%s", one_physical_cam_num(cam_idx), suffix));
-
-  return regs;
-}
-
-static std::vector<VfeRegWrite> parse_vfe_reg_path(const char *path, const char *source, int cam_idx) {
-  if (path == nullptr || path[0] == '\0') return {};
-
-  std::string spec = util::read_file(path);
-  if (spec.empty()) {
-    LOGE("cam %d: %s '%s' is empty or unreadable", cam_idx, source, path);
-    return {};
-  }
-
-  auto regs = parse_vfe_reg_spec(spec, source, cam_idx);
-  LOG("cam %d: loaded %zu VFE regs from %s '%s'", cam_idx, regs.size(), source, path);
-  return regs;
-}
-
-static std::vector<VfeRegWrite> parse_cam_vfe_reg_paths(const char *path_env_name, int cam_idx) {
-  std::vector<VfeRegWrite> regs;
-
-  auto append_path_env = [&](const std::string &name) {
-    const char *path = getenv(name.c_str());
-    if (path == nullptr || path[0] == '\0') return;
-    auto parsed = parse_vfe_reg_path(path, name.c_str(), cam_idx);
-    regs.insert(regs.end(), parsed.begin(), parsed.end());
-  };
-
-  const char *suffix = path_env_name;
-  constexpr const char *prefix = "ASIUS_CAM_";
-  constexpr size_t prefix_len = 10;
-  if (strncmp(path_env_name, prefix, prefix_len) == 0) suffix = path_env_name + prefix_len;
-
-  append_path_env(path_env_name);
-  append_path_env(util::string_format("ASIUS_CAM%d_%s", cam_idx, suffix));
-  append_path_env(util::string_format("ASIUS_PHYS_CAM%d_%s", one_physical_cam_num(cam_idx), suffix));
-
-  return regs;
-}
-
-static std::vector<VfeDmiUpload> parse_cam_vfe_dmi_overrides(const char *env_name, int cam_idx) {
-  std::vector<VfeDmiUpload> uploads;
-
-  auto append_env = [&](const std::string &name) {
-    const char *env = getenv(name.c_str());
-    if (env == nullptr || env[0] == '\0') return;
-    auto parsed = parse_vfe_dmi_spec(env, name.c_str(), cam_idx);
-    uploads.insert(uploads.end(), std::make_move_iterator(parsed.begin()), std::make_move_iterator(parsed.end()));
-  };
-
-  const char *suffix = env_name;
-  constexpr const char *prefix = "ASIUS_CAM_";
-  constexpr size_t prefix_len = 10;
-  if (strncmp(env_name, prefix, prefix_len) == 0) suffix = env_name + prefix_len;
-
-  append_env(env_name);
-  append_env(util::string_format("ASIUS_CAM%d_%s", cam_idx, suffix));
-  append_env(util::string_format("ASIUS_PHYS_CAM%d_%s", one_physical_cam_num(cam_idx), suffix));
-
-  return uploads;
-}
-
-static std::vector<VfeDmiUpload> parse_vfe_dmi_path(const char *path, const char *source, int cam_idx) {
-  if (path == nullptr || path[0] == '\0') return {};
-
-  std::string spec = util::read_file(path);
-  if (spec.empty()) {
-    LOGE("cam %d: %s '%s' is empty or unreadable", cam_idx, source, path);
-    return {};
-  }
-
-  auto uploads = parse_vfe_dmi_spec(spec, source, cam_idx);
-  LOG("cam %d: loaded %zu VFE DMI uploads from %s '%s'", cam_idx, uploads.size(), source, path);
-  return uploads;
-}
-
-static std::vector<VfeDmiUpload> parse_cam_vfe_dmi_paths(const char *path_env_name, int cam_idx) {
-  std::vector<VfeDmiUpload> uploads;
-
-  auto append_path_env = [&](const std::string &name) {
-    const char *path = getenv(name.c_str());
-    if (path == nullptr || path[0] == '\0') return;
-    auto parsed = parse_vfe_dmi_path(path, name.c_str(), cam_idx);
-    uploads.insert(uploads.end(), std::make_move_iterator(parsed.begin()), std::make_move_iterator(parsed.end()));
-  };
-
-  const char *suffix = path_env_name;
-  constexpr const char *prefix = "ASIUS_CAM_";
-  constexpr size_t prefix_len = 10;
-  if (strncmp(path_env_name, prefix, prefix_len) == 0) suffix = path_env_name + prefix_len;
-
-  append_path_env(path_env_name);
-  append_path_env(util::string_format("ASIUS_CAM%d_%s", cam_idx, suffix));
-  append_path_env(util::string_format("ASIUS_PHYS_CAM%d_%s", one_physical_cam_num(cam_idx), suffix));
-
-  return uploads;
-}
-
 static bool apply_os04_20fps_timing(int sensor_fd, int cam_idx) {
-  if (getenv("ASIUS_CAM_DISABLE_20FPS_TIMING") != nullptr) return true;
   return write_sensor_regs(sensor_fd, {
     {0x380e, (OS04_RAW10_20FPS_VTS >> 8) & 0xff},
     {0x380f, OS04_RAW10_20FPS_VTS & 0xff},
   }, "20fps timing", cam_idx);
 }
 
-static int one_output_scale(const SensorInfo &sensor, int cam_idx) {
-  int scale = std::max(sensor.out_scale, 1);
-  const char *scale_env = getenv("ASIUS_CAM_OUT_SCALE");
-  if (scale_env != nullptr && scale_env[0] != '\0') {
-    int env_scale = atoi(scale_env);
-    if (env_scale < 1 || env_scale > 8) {
-      LOGE("cam %d: ignoring invalid ASIUS_CAM_OUT_SCALE=%s", cam_idx, scale_env);
-    } else {
-      scale = env_scale;
-    }
-  }
-  return scale;
-}
-
-static void apply_os04_frame_size_overrides(SensorInfo &sensor, int cam_idx) {
-  const char *w_env = getenv("ASIUS_CAM_FRAME_WIDTH");
-  const char *h_env = getenv("ASIUS_CAM_FRAME_HEIGHT");
-  if (w_env == nullptr && h_env == nullptr) return;
-
-  int width = w_env != nullptr ? atoi(w_env) : sensor.frame_width;
-  int height = h_env != nullptr ? atoi(h_env) : sensor.frame_height;
-  if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
-    LOGE("cam %d: ignoring invalid ASIUS_CAM_FRAME_WIDTH/HEIGHT=%s/%s",
-         cam_idx, w_env ? w_env : "", h_env ? h_env : "");
-    return;
-  }
-
-  sensor.frame_width = width;
-  sensor.frame_height = height;
-  sensor.frame_stride = width * sensor.bits_per_pixel / 8;
-  LOG("cam %d: overriding OS04 frame size to %dx%d", cam_idx, width, height);
-}
-
-static int getenv_int_clamped(const char *name, int default_value, int min_value, int max_value) {
-  const char *env = getenv(name);
-  if (env == nullptr || env[0] == '\0') return default_value;
-
-  char *end = nullptr;
-  long value = strtol(env, &end, 10);
-  if (end == env || (end != nullptr && *end != '\0')) return default_value;
-  return std::clamp((int)value, min_value, max_value);
+static int one_output_scale(const SensorInfo &sensor) {
+  return std::max(sensor.out_scale, 1);
 }
 
 static int one_physical_cam_num(int camera_num) {
   // openpilot camera_num 0/1/2 maps to physical CAM3/CAM2/CAM1.
   static const int physical[] = {3, 2, 1};
   return (camera_num >= 0 && camera_num < 3) ? physical[camera_num] : camera_num;
-}
-
-static const char *one_cam_env_value(const char *base_name, int camera_num) {
-  const char *suffix = base_name;
-  constexpr const char *prefix = "ASIUS_CAM_";
-  constexpr size_t prefix_len = 10;
-  if (strncmp(base_name, prefix, prefix_len) == 0) suffix = base_name + prefix_len;
-
-  std::string physical_name = util::string_format("ASIUS_PHYS_CAM%d_%s", one_physical_cam_num(camera_num), suffix);
-  const char *physical = getenv(physical_name.c_str());
-  if (physical != nullptr && physical[0] != '\0') return physical;
-
-  std::string indexed_name = util::string_format("ASIUS_CAM%d_%s", camera_num, suffix);
-  const char *indexed = getenv(indexed_name.c_str());
-  if (indexed != nullptr && indexed[0] != '\0') return indexed;
-
-  const char *global = getenv(base_name);
-  return (global != nullptr && global[0] != '\0') ? global : nullptr;
-}
-
-static float getenv_cam_float_clamped(const char *base_name, int camera_num, float default_value, float min_value, float max_value) {
-  const char *env = one_cam_env_value(base_name, camera_num);
-  if (env == nullptr) return default_value;
-
-  char *end = nullptr;
-  float value = strtof(env, &end);
-  if (end == env || (end != nullptr && *end != '\0')) return default_value;
-  return std::clamp(value, min_value, max_value);
-}
-
-static int getenv_cam_int_clamped(const char *base_name, int camera_num, int default_value, int min_value, int max_value) {
-  const char *env = one_cam_env_value(base_name, camera_num);
-  if (env == nullptr) return default_value;
-
-  char *end = nullptr;
-  long value = strtol(env, &end, 10);
-  if (end == env || (end != nullptr && *end != '\0')) return default_value;
-  return std::clamp((int)value, min_value, max_value);
 }
 
 static std::vector<uint32_t> build_os04_gamma_lut(float k) {
@@ -1248,11 +760,8 @@ public:
   bool map_pix_buffers();
   bool configure_pix_isp();
   bool write_vfe_regs(const std::vector<VfeRegWrite> &regs, const char *name);
-  bool write_vfe_dmis(const std::vector<VfeDmiUpload> &uploads, const char *name);
-  bool apply_vfe_reg_overrides(const char *env_name, const char *path_env_name, const char *name);
-  bool apply_vfe_vignetting_override();
-  bool apply_vfe_gamma_override();
-  bool apply_vfe_dmi_overrides(const char *env_name, const char *path_env_name, const char *name);
+  bool apply_vfe_tuning();
+  bool apply_vfe_gamma();
   bool set_pix_buffer(int index);
   bool use_custom_pix_ioctl() const { return use_pix && !use_pix_v4l2; }
   bool use_direct_vipc_buffers() const { return use_custom_pix_ioctl() || use_v4l2_dmabuf; }
@@ -1329,22 +838,18 @@ void OneCamera::setup_media_links() {
 
   struct media_link_desc link = {};
 
-  if (!one_uses_csid_tpg()) {
-    set_csid_tpg_ctrl(dcfg.csid_subdev, 0, cam_idx, "disabled");
+  disable_csid_tpg(dcfg.csid_subdev, cam_idx);
 
-    // CSIPHY -> CSID (source pad 1 -> sink pad 0)
-    link.source = {.entity = (uint32_t)dcfg.csiphy_entity, .index = 1};
-    link.sink = {.entity = (uint32_t)dcfg.csid_entity, .index = 0};
-    link.flags = MEDIA_LNK_FL_ENABLED;
-    if (ioctl(media_fd, MEDIA_IOC_SETUP_LINK, &link) != 0)
-      LOGE("cam %d: csiphy->csid link FAILED: %d (%s)", cam_idx, errno, strerror(errno));
-    memset(&link, 0, sizeof(link));
-  } else {
-    LOG("cam %d: using CSID test pattern generator, skipping CSIPHY link", cam_idx);
-  }
+  // CSIPHY -> CSID (source pad 1 -> sink pad 0)
+  link.source = {.entity = (uint32_t)dcfg.csiphy_entity, .index = 1};
+  link.sink = {.entity = (uint32_t)dcfg.csid_entity, .index = 0};
+  link.flags = MEDIA_LNK_FL_ENABLED;
+  if (ioctl(media_fd, MEDIA_IOC_SETUP_LINK, &link) != 0)
+    LOGE("cam %d: csiphy->csid link FAILED: %d (%s)", cam_idx, errno, strerror(errno));
+  memset(&link, 0, sizeof(link));
 
   // Mainline CAMSS exposes the PIX path on the CSID source pad selected here.
-  link.source = {.entity = (uint32_t)dcfg.csid_entity, .index = (uint16_t)one_pix_csid_source_pad()};
+  link.source = {.entity = (uint32_t)dcfg.csid_entity, .index = ONE_PIX_CSID_SOURCE_PAD};
   link.sink = {.entity = (uint32_t)dcfg.vfe_pix_entity, .index = 0};
   link.flags = MEDIA_LNK_FL_ENABLED;
   if (ioctl(media_fd, MEDIA_IOC_SETUP_LINK, &link) != 0)
@@ -1358,43 +863,35 @@ void OneCamera::set_formats() {
   int cam_idx = cc.camera_num;
   auto &dcfg = one_cams[cam_idx];
   const uint32_t media_bus_code = one_media_bus_code();
-  const bool use_tpg = one_uses_csid_tpg();
-
-  if (!use_tpg) {
-    // set format on CSIPHY subdev
-    int csiphy_fd = open(util::string_format("/dev/v4l-subdev%d", dcfg.csiphy_subdev).c_str(), O_RDWR);
-    if (csiphy_fd >= 0) {
-      struct v4l2_subdev_format sfmt = {};
-      sfmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
-      sfmt.pad = 0;
-      sfmt.format.width = sensor->frame_width;
-      sfmt.format.height = sensor->frame_height;
-      sfmt.format.code = media_bus_code;
-      ioctl(csiphy_fd, VIDIOC_SUBDEV_S_FMT, &sfmt);
-      sfmt.pad = 1;
-      ioctl(csiphy_fd, VIDIOC_SUBDEV_S_FMT, &sfmt);
-      close(csiphy_fd);
-    }
+  // set format on CSIPHY subdev
+  int csiphy_fd = open(util::string_format("/dev/v4l-subdev%d", dcfg.csiphy_subdev).c_str(), O_RDWR);
+  if (csiphy_fd >= 0) {
+    struct v4l2_subdev_format sfmt = {};
+    sfmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+    sfmt.pad = 0;
+    sfmt.format.width = sensor->frame_width;
+    sfmt.format.height = sensor->frame_height;
+    sfmt.format.code = media_bus_code;
+    ioctl(csiphy_fd, VIDIOC_SUBDEV_S_FMT, &sfmt);
+    sfmt.pad = 1;
+    ioctl(csiphy_fd, VIDIOC_SUBDEV_S_FMT, &sfmt);
+    close(csiphy_fd);
   }
 
   // set format on CSID subdev
   int csid_fd = open(util::string_format("/dev/v4l-subdev%d", dcfg.csid_subdev).c_str(), O_RDWR);
   if (csid_fd >= 0) {
     struct v4l2_subdev_format sfmt = {};
-    if (use_tpg) {
-      set_csid_tpg_ctrl(dcfg.csid_subdev, one_csid_tpg_mode(), cam_idx, "set");
-    } else {
-      sfmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
-      sfmt.pad = 0;
-      sfmt.format.width = sensor->frame_width;
-      sfmt.format.height = sensor->frame_height;
-      sfmt.format.code = media_bus_code;
-      ioctl(csid_fd, VIDIOC_SUBDEV_S_FMT, &sfmt);
-    }
+    sfmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+    sfmt.pad = 0;
+    sfmt.format.width = sensor->frame_width;
+    sfmt.format.height = sensor->frame_height;
+    sfmt.format.code = media_bus_code;
+    ioctl(csid_fd, VIDIOC_SUBDEV_S_FMT, &sfmt);
 
     // PIX source pad matching the selected virtual channel.
     sfmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
-    sfmt.pad = one_pix_csid_source_pad();
+    sfmt.pad = ONE_PIX_CSID_SOURCE_PAD;
     sfmt.format.width = sensor->frame_width;
     sfmt.format.height = sensor->frame_height;
     sfmt.format.code = media_bus_code;
@@ -1403,7 +900,7 @@ void OneCamera::set_formats() {
   }
 
   // set format on sensor subdev
-  if (sensor_fd >= 0 && !use_tpg) {
+  if (sensor_fd >= 0) {
     struct v4l2_subdev_format sfmt = {};
     sfmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
     sfmt.pad = 0;
@@ -1559,137 +1056,22 @@ bool OneCamera::write_vfe_regs(const std::vector<VfeRegWrite> &regs, const char 
   return true;
 }
 
-bool OneCamera::write_vfe_dmis(const std::vector<VfeDmiUpload> &uploads, const char *name) {
+bool OneCamera::apply_vfe_tuning() {
   if (!use_pix || video_fd < 0) return true;
-  if (uploads.empty()) return true;
-
-  size_t values = 0;
-  for (const auto &upload : uploads) {
-    VfeDmiCmd cmd = {};
-    cmd.dmi_cfg_offset = upload.dmi_cfg_offset;
-    cmd.ram_select = upload.ram_select;
-    cmd.count = (uint32_t)upload.data.size();
-    cmd.data = (uint64_t)(uintptr_t)upload.data.data();
-    if (one_ioctl(video_fd, VFE_WRITE_DMI, &cmd) != 0) {
-      LOGE("cam %d: failed to write %s VFE DMI cfg=0x%x ram=%u count=%u from %s: %d (%s)",
-           cc.camera_num, name, cmd.dmi_cfg_offset, cmd.ram_select, cmd.count,
-           upload.source.c_str(), errno, strerror(errno));
-      return false;
-    }
-    values += upload.data.size();
-  }
-
-  if (one_ioctl(video_fd, VFE_REG_UPDATE) != 0) {
-    LOGE("cam %d: failed to commit %s VFE DMI uploads: %d (%s)",
-         cc.camera_num, name, errno, strerror(errno));
-    return false;
-  }
-
-  LOG("cam %d: wrote %zu %s VFE DMI uploads (%zu dwords)",
-      cc.camera_num, uploads.size(), name, values);
-  return true;
+  if (!sensor || sensor->image_sensor != cereal::FrameData::ImageSensor::OS04C10) return true;
+  return write_vfe_regs(default_os04_vfe_tuning_regs(cc.camera_num), "OS04 tuning");
 }
 
-bool OneCamera::apply_vfe_reg_overrides(const char *env_name, const char *path_env_name, const char *name) {
-  if (!use_pix || video_fd < 0) return true;
-
-  std::vector<VfeRegWrite> regs;
-  if (sensor && sensor->image_sensor == cereal::FrameData::ImageSensor::OS04C10) {
-    regs = default_os04_vfe_tuning_regs(cc.camera_num);
-  }
-  auto env_regs = parse_cam_vfe_reg_overrides(env_name, cc.camera_num);
-  regs.insert(regs.end(), env_regs.begin(), env_regs.end());
-  auto path_regs = parse_cam_vfe_reg_paths(path_env_name, cc.camera_num);
-  regs.insert(regs.end(), path_regs.begin(), path_regs.end());
-  return write_vfe_regs(regs, name);
-}
-
-bool OneCamera::apply_vfe_dmi_overrides(const char *env_name, const char *path_env_name, const char *name) {
-  if (!use_pix || video_fd < 0) return true;
-
-  auto uploads = parse_cam_vfe_dmi_overrides(env_name, cc.camera_num);
-  auto path_uploads = parse_cam_vfe_dmi_paths(path_env_name, cc.camera_num);
-  uploads.insert(uploads.end(), std::make_move_iterator(path_uploads.begin()), std::make_move_iterator(path_uploads.end()));
-  return write_vfe_dmis(uploads, name);
-}
-
-bool OneCamera::apply_vfe_vignetting_override() {
+bool OneCamera::apply_vfe_gamma() {
   if (!use_pix || video_fd < 0 || !sensor ||
       sensor->image_sensor != cereal::FrameData::ImageSensor::OS04C10) {
     return true;
   }
 
-  if (one_cam_env_value("ASIUS_CAM_DISABLE_VIGNETTING_DMI", cc.camera_num) != nullptr) return true;
-  if (!default_os04_vfe_rolloff_enabled(cc.camera_num) &&
-      one_cam_env_value("ASIUS_CAM_ENABLE_VIGNETTING_DMI", cc.camera_num) == nullptr &&
-      one_cam_env_value("ASIUS_CAM_ENABLE_ROLLOFF", cc.camera_num) == nullptr) {
-    return true;
-  }
-
-  if (sensor->vignetting_lut.empty()) {
-    LOGE("cam %d: OS04 vignetting DMI requested but LUT is empty", cc.camera_num);
-    return false;
-  }
-
-  std::vector<VfeRegWrite> regs = os04_vfe_vignetting_config_reg_writes();
-  for (size_t offset = 0; offset < regs.size(); ) {
-    const size_t count = std::min<size_t>(regs.size() - offset, 1024);
-    VfeWriteRegsCmd cmd = {};
-    cmd.regs = (uint64_t)(uintptr_t)(regs.data() + offset);
-    cmd.count = count;
-    if (one_ioctl(video_fd, VFE_WRITE_REGS, &cmd) != 0) {
-      LOGE("cam %d: failed to write OS04 vignetting config offset=%zu count=%zu: %d (%s)",
-           cc.camera_num, offset, count, errno, strerror(errno));
-      return false;
-    }
-    offset += count;
-  }
-
-  struct VignettingBank {
-    uint8_t ram_select;
-    const char *name;
-  };
-  const VignettingBank banks[] = {
-    {14, "GRR"},
-    {15, "GBB"},
-  };
-  for (const auto &bank : banks) {
-    VfeDmiCmd cmd = {};
-    cmd.dmi_cfg_offset = 0xc24;
-    cmd.ram_select = bank.ram_select;
-    cmd.count = (uint32_t)sensor->vignetting_lut.size();
-    cmd.data = (uint64_t)(uintptr_t)sensor->vignetting_lut.data();
-    if (one_ioctl(video_fd, VFE_WRITE_DMI, &cmd) != 0) {
-      LOGE("cam %d: failed to write OS04 vignetting DMI ram=%u/%s count=%u: %d (%s)",
-           cc.camera_num, bank.ram_select, bank.name, cmd.count, errno, strerror(errno));
-      return false;
-    }
-  }
-
-  if (one_ioctl(video_fd, VFE_REG_UPDATE) != 0) {
-    LOGE("cam %d: failed to commit OS04 vignetting DMI: %d (%s)",
-         cc.camera_num, errno, strerror(errno));
-    return false;
-  }
-
-  LOG("cam %d: wrote OS04 vignetting config and DMI override count=%zu",
-      cc.camera_num, sensor->vignetting_lut.size());
-  return true;
-}
-
-bool OneCamera::apply_vfe_gamma_override() {
-  if (!use_pix || video_fd < 0 || !sensor ||
-      sensor->image_sensor != cereal::FrameData::ImageSensor::OS04C10) {
-    return true;
-  }
-
-  if (getenv("ASIUS_CAM_DISABLE_GAMMA_OVERRIDE") != nullptr) return true;
-
-  const float default_k = default_os04_gamma_k(cc.camera_num);
-  const float k = getenv_cam_float_clamped("ASIUS_CAM_GAMMA_K", cc.camera_num, default_k, 1.0f, 40.0f);
-  const float g_k = getenv_cam_float_clamped("ASIUS_CAM_GAMMA_G_K", cc.camera_num, k, 1.0f, 40.0f);
-  const float b_k = getenv_cam_float_clamped("ASIUS_CAM_GAMMA_B_K", cc.camera_num, k, 1.0f, 40.0f);
-  const float r_k = getenv_cam_float_clamped("ASIUS_CAM_GAMMA_R_K", cc.camera_num, k, 1.0f, 40.0f);
+  const float k = default_os04_gamma_k(cc.camera_num);
+  const float g_k = k;
+  const float b_k = k;
+  const float r_k = k;
   std::vector<uint32_t> gamma_g = build_os04_gamma_lut(g_k);
   std::vector<uint32_t> gamma_b = build_os04_gamma_lut(b_k);
   std::vector<uint32_t> gamma_r = build_os04_gamma_lut(r_k);
@@ -1772,19 +1154,16 @@ void OneCamera::camera_open(VisionIpcServer *v) {
     enabled = false;
     return;
   }
-  if (getenv("ASIUS_OS04_RAW12") == nullptr) {
-    LOG("cam %d: using OS04C10 RAW10 media path", cam_idx);
-    sensor->bits_per_pixel = 10;
-    sensor->mipi_format = CAM_FORMAT_MIPI_RAW_10;
-    sensor->frame_data_type = CSI_RAW10;
-    sensor->frame_stride = sensor->frame_width * 10 / 8;
-  }
-  apply_os04_frame_size_overrides(*sensor, cam_idx);
+  LOG("cam %d: using OS04C10 RAW10 media path", cam_idx);
+  sensor->bits_per_pixel = 10;
+  sensor->mipi_format = CAM_FORMAT_MIPI_RAW_10;
+  sensor->frame_data_type = CSI_RAW10;
+  sensor->frame_stride = sensor->frame_width * 10 / 8;
 
-  use_pix = one_uses_vfe_pix() && dcfg.vfe_pix_entity != 0 &&
+  use_pix = dcfg.vfe_pix_entity != 0 &&
             dcfg.pix_video_dev >= 0 && dcfg.vfe_pix_subdev >= 0;
-  use_pix_v4l2 = use_pix && one_uses_pix_v4l2();
-  if (one_uses_vfe_pix() && !use_pix) {
+  use_pix_v4l2 = use_pix;
+  if (!use_pix) {
     LOGE("cam %d: VFE PIX unavailable, disabling camera; OS04 CPU debayer is not available on this branch "
          "(pix_entity=%u pix_dev=%d pix_subdev=%d)",
          cam_idx, dcfg.vfe_pix_entity, dcfg.pix_video_dev, dcfg.vfe_pix_subdev);
@@ -1792,7 +1171,7 @@ void OneCamera::camera_open(VisionIpcServer *v) {
     return;
   }
 
-  const int output_scale = one_output_scale(*sensor, cam_idx);
+  const int output_scale = one_output_scale(*sensor);
   output_width = std::max(2U, (sensor->frame_width / output_scale) & ~1U);
   output_height = std::max(2U, (sensor->frame_height / output_scale) & ~1U);
   auto [s, yh, uvh, sz] = get_nv12_info(output_width, output_height);
@@ -1831,26 +1210,12 @@ void OneCamera::camera_open(VisionIpcServer *v) {
     return;
   }
 
-  if (one_uses_csid_tpg()) {
-    LOG("cam %d: skipping sensor init for CSID TPG", cam_idx);
-  } else {
-    const char *init_reg_file = getenv("ASIUS_CAM_INIT_REG_FILE");
-    bool init_ok = (init_reg_file != nullptr && init_reg_file[0] != '\0') ?
-                   write_sensor_reg_path(sensor_fd, init_reg_file, "ASIUS_CAM_INIT_REG_FILE", "init file", cam_idx) :
-                   write_sensor_regs(sensor_fd, os04_default_init_regs(), "init file", cam_idx);
-    if (!init_ok) {
-      enabled = false;
-      return;
-    }
-  }
-
-  if (!one_uses_csid_tpg() && !apply_os04_20fps_timing(sensor_fd, cam_idx)) {
+  if (!write_sensor_regs(sensor_fd, os04_default_init_regs(), "init file", cam_idx)) {
     enabled = false;
     return;
   }
 
-  if (!one_uses_csid_tpg() &&
-      !write_sensor_reg_overrides(sensor_fd, "ASIUS_CAM_INIT_REG_OVERRIDES", "init overrides", cam_idx)) {
+  if (!apply_os04_20fps_timing(sensor_fd, cam_idx)) {
     enabled = false;
     return;
   }
@@ -1867,8 +1232,7 @@ void OneCamera::camera_open(VisionIpcServer *v) {
       enabled = false;
       return;
     }
-    const int default_bufs = 4;
-    n_bufs = getenv_int_clamped("ASIUS_CAM_V4L2_BUFFER_COUNT", default_bufs, 4, VIPC_BUFFER_COUNT);
+    n_bufs = 4;
   }
 
   if (use_custom_pix_ioctl()) {
@@ -1928,12 +1292,6 @@ void OneCamera::queue_all_buffers() {
 void OneCamera::stream_on() {
   if (!enabled) return;
 
-  if (!one_uses_csid_tpg() &&
-      !write_sensor_reg_overrides(sensor_fd, "ASIUS_CAM_PRESTART_REG_OVERRIDES", "prestart overrides", cc.camera_num)) {
-    enabled = false;
-    return;
-  }
-
   if (use_custom_pix_ioctl()) {
     if (one_ioctl(video_fd, VFE_START) != 0) {
       LOGE("cam %d: VFE_START failed: %d (%s)", cc.camera_num, errno, strerror(errno));
@@ -1949,39 +1307,19 @@ void OneCamera::stream_on() {
       return;
     }
 
-    if (!one_uses_csid_tpg() &&
-        !write_sensor_regs(sensor_fd, sensor->start_reg_array, "start", cc.camera_num)) {
+    if (!write_sensor_regs(sensor_fd, sensor->start_reg_array, "start", cc.camera_num)) {
       one_ioctl(video_fd, VFE_STOP);
       enabled = false;
       return;
     }
 
-    if (!one_uses_csid_tpg() &&
-        !write_sensor_reg_overrides(sensor_fd, "ASIUS_CAM_POSTSTART_REG_OVERRIDES", "poststart overrides", cc.camera_num)) {
+    if (!apply_vfe_tuning()) {
       one_ioctl(video_fd, VFE_STOP);
       enabled = false;
       return;
     }
 
-    if (!apply_vfe_vignetting_override()) {
-      one_ioctl(video_fd, VFE_STOP);
-      enabled = false;
-      return;
-    }
-
-    if (!apply_vfe_reg_overrides("ASIUS_CAM_VFE_REG_OVERRIDES", "ASIUS_CAM_VFE_REG_FILE", "poststart overrides")) {
-      one_ioctl(video_fd, VFE_STOP);
-      enabled = false;
-      return;
-    }
-
-    if (!apply_vfe_gamma_override()) {
-      one_ioctl(video_fd, VFE_STOP);
-      enabled = false;
-      return;
-    }
-
-    if (!apply_vfe_dmi_overrides("ASIUS_CAM_VFE_DMI_OVERRIDES", "ASIUS_CAM_VFE_DMI_FILE", "poststart overrides")) {
+    if (!apply_vfe_gamma()) {
       one_ioctl(video_fd, VFE_STOP);
       enabled = false;
       return;
@@ -1992,49 +1330,26 @@ void OneCamera::stream_on() {
     return;
   }
 
-  bool sensor_started = false;
-
   int type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
   if (ioctl(video_fd, VIDIOC_STREAMON, &type) != 0) {
     LOGE("cam %d: STREAMON failed: %d (%s)", cc.camera_num, errno, strerror(errno));
-    if (sensor_started) write_sensor_regs(sensor_fd, {{0x100, 0}}, "stop", cc.camera_num);
     enabled = false;
     return;
   }
 
-  if (!sensor_started && !one_uses_csid_tpg() &&
-      !write_sensor_regs(sensor_fd, sensor->start_reg_array, "start", cc.camera_num)) {
+  if (!write_sensor_regs(sensor_fd, sensor->start_reg_array, "start", cc.camera_num)) {
     ioctl(video_fd, VIDIOC_STREAMOFF, &type);
     enabled = false;
     return;
   }
 
-  if (!one_uses_csid_tpg() &&
-      !write_sensor_reg_overrides(sensor_fd, "ASIUS_CAM_POSTSTART_REG_OVERRIDES", "poststart overrides", cc.camera_num)) {
+  if (!apply_vfe_tuning()) {
     ioctl(video_fd, VIDIOC_STREAMOFF, &type);
     enabled = false;
     return;
   }
 
-  if (!apply_vfe_vignetting_override()) {
-    ioctl(video_fd, VIDIOC_STREAMOFF, &type);
-    enabled = false;
-    return;
-  }
-
-  if (!apply_vfe_reg_overrides("ASIUS_CAM_VFE_REG_OVERRIDES", "ASIUS_CAM_VFE_REG_FILE", "poststart overrides")) {
-    ioctl(video_fd, VIDIOC_STREAMOFF, &type);
-    enabled = false;
-    return;
-  }
-
-  if (!apply_vfe_gamma_override()) {
-    ioctl(video_fd, VIDIOC_STREAMOFF, &type);
-    enabled = false;
-    return;
-  }
-
-  if (!apply_vfe_dmi_overrides("ASIUS_CAM_VFE_DMI_OVERRIDES", "ASIUS_CAM_VFE_DMI_FILE", "poststart overrides")) {
+  if (!apply_vfe_gamma()) {
     ioctl(video_fd, VIDIOC_STREAMOFF, &type);
     enabled = false;
     return;
@@ -2050,7 +1365,7 @@ void OneCamera::start_streaming() {
 }
 
 void OneCamera::stop_streaming() {
-  if (streaming && sensor_fd >= 0 && !one_uses_csid_tpg()) {
+  if (streaming && sensor_fd >= 0) {
     write_sensor_regs(sensor_fd, {{0x100, 0}}, "stop", cc.camera_num);
   }
 
@@ -2118,8 +1433,6 @@ int OneCamera::dequeue_frame(uint64_t *timestamp) {
 
 void OneCamera::set_exposure(int exposure_time, int gain_idx) {
   if (sensor_fd < 0) return;
-
-  if (one_uses_csid_tpg()) return;
 
   write_sensor_regs(sensor_fd, sensor->getExposureRegisters(exposure_time, gain_idx, false),
                     "exposure", cc.camera_num);
@@ -2227,14 +1540,9 @@ void CameraState::init(VisionIpcServer *v) {
   pm = std::make_unique<PubMaster>(std::vector{camera.cc.publish_name});
 
   if (camera.sensor->image_sensor == cereal::FrameData::ImageSensor::OS04C10) {
-    exposure_time = getenv_cam_int_clamped("ASIUS_CAM_START_EXPOSURE_LINES", camera.cc.camera_num, 600,
-                                           camera.sensor->exposure_time_min,
-                                           camera.sensor->exposure_time_max);
-    exposure_time = std::clamp(exposure_time, camera.sensor->exposure_time_min,
-                               camera.sensor->exposure_time_max);
+    exposure_time = std::clamp(600, camera.sensor->exposure_time_min, camera.sensor->exposure_time_max);
     gain_idx = camera.sensor->analog_gain_rec_idx;
-    target_grey_fraction = getenv_cam_float_clamped("ASIUS_CAM_TARGET_GREY", camera.cc.camera_num,
-                                                    default_os04_target_grey(camera.cc.camera_num), 0.05f, 0.75f);
+    target_grey_fraction = default_os04_target_grey(camera.cc.camera_num);
   }
 
   float gain = camera.sensor->sensor_analog_gains[gain_idx];
@@ -2398,30 +1706,19 @@ void CameraState::init_awb() {
       camera.sensor->image_sensor != cereal::FrameData::ImageSensor::OS04C10) {
     return;
   }
-  if (one_cam_env_value("ASIUS_CAM_DISABLE_AWB", camera.cc.camera_num) != nullptr) return;
-
-  const bool awb_explicit = one_cam_env_value("ASIUS_CAM_ENABLE_AWB", camera.cc.camera_num) != nullptr;
-  const bool has_vfe_override =
-      one_cam_env_value("ASIUS_CAM_VFE_REG_OVERRIDES", camera.cc.camera_num) != nullptr ||
-      one_cam_env_value("ASIUS_CAM_VFE_REG_FILE", camera.cc.camera_num) != nullptr;
-  if (!awb_explicit && has_vfe_override) return;
-  if (!awb_explicit && getenv("ASIUS_CAM_DISABLE_DEFAULT_VFE_TUNING") != nullptr) return;
-
   const Os04VfeWbRegs wb = default_os04_vfe_wb_regs(camera.cc.camera_num);
   if (!wb.valid) return;
 
-  awb_interval = getenv_cam_int_clamped("ASIUS_CAM_AWB_INTERVAL", camera.cc.camera_num, 20, 5, 240);
-  awb_start_frame = getenv_cam_int_clamped("ASIUS_CAM_AWB_START_FRAME", camera.cc.camera_num, 40, 0, 2000);
-  awb_deadband = getenv_cam_int_clamped("ASIUS_CAM_AWB_DEADBAND", camera.cc.camera_num, 1, 0, 16);
-  awb_response = getenv_cam_int_clamped("ASIUS_CAM_AWB_RESPONSE", camera.cc.camera_num, 4, 1, 16);
-  awb_max_step = getenv_cam_int_clamped("ASIUS_CAM_AWB_MAX_STEP", camera.cc.camera_num, 16, 1, 32);
-  awb_y_min = getenv_cam_int_clamped("ASIUS_CAM_AWB_Y_MIN", camera.cc.camera_num, 40, 0, 255);
-  awb_y_max = getenv_cam_int_clamped("ASIUS_CAM_AWB_Y_MAX", camera.cc.camera_num, 235, 0, 255);
-  if (awb_y_max < awb_y_min) awb_y_max = awb_y_min;
-  awb_chroma_limit = getenv_cam_int_clamped("ASIUS_CAM_AWB_CHROMA_LIMIT", camera.cc.camera_num, 24, 0, 255);
-  awb_min_samples = getenv_cam_int_clamped("ASIUS_CAM_AWB_MIN_SAMPLES", camera.cc.camera_num, 64, 1, 100000);
-  const int awb_range = getenv_cam_int_clamped("ASIUS_CAM_AWB_RANGE", camera.cc.camera_num,
-                                               default_os04_awb_range(camera.cc.camera_num), 0, 0x100);
+  awb_interval = 20;
+  awb_start_frame = 40;
+  awb_deadband = 1;
+  awb_response = 4;
+  awb_max_step = 16;
+  awb_y_min = 40;
+  awb_y_max = 235;
+  awb_chroma_limit = 24;
+  awb_min_samples = 64;
+  const int awb_range = default_os04_awb_range(camera.cc.camera_num);
 
   awb_blue = wb.blue;
   awb_green = wb.green;
@@ -2438,17 +1735,12 @@ void CameraState::init_awb() {
 
 void CameraState::update_awb(const uint8_t *nv12) {
   if (!awb_enabled) return;
-  const bool log_awb = one_cam_env_value("ASIUS_CAM_LOG_AWB", camera.cc.camera_num) != nullptr;
 
   const Nv12ChromaMedian med = calculate_chroma_median_nv12(nv12, camera.stride, camera.uv_offset,
                                                             awb_xywh, camera.output_width,
                                                             camera.output_height, 16, 16, awb_y_min,
                                                             awb_y_max, awb_chroma_limit, awb_min_samples);
   if (!med.valid) {
-    if (log_awb) {
-      LOG("cam %d: OS04 AWB invalid sample y=%d-%d chroma=%d min_samples=%d blue=0x%x red=0x%x",
-          camera.cc.camera_num, awb_y_min, awb_y_max, awb_chroma_limit, awb_min_samples, awb_blue, awb_red);
-    }
     return;
   }
 
@@ -2461,10 +1753,6 @@ void CameraState::update_awb(const uint8_t *nv12) {
   const int new_blue = std::clamp(awb_blue + step_from_median(med.u), awb_blue_min, awb_blue_max);
   const int new_red = std::clamp(awb_red + step_from_median(med.v), awb_red_min, awb_red_max);
   if (new_blue == awb_blue && new_red == awb_red) {
-    if (log_awb) {
-      LOG("cam %d: OS04 AWB stable U=%d V=%d samples=%u neutral=%u blue=0x%x red=0x%x",
-          camera.cc.camera_num, med.u, med.v, med.samples, med.neutral_samples, awb_blue, awb_red);
-    }
     return;
   }
 
@@ -2513,25 +1801,17 @@ void CameraState::set_camera_exposure(const Os04AeSample &ae_sample) {
       cur_ev[(frame_id - 1) % 3];
   const float commanded_ev = exposure_time * sens->sensor_analog_gains[gain_idx];
   float new_target_grey = os04 ?
-                          getenv_cam_float_clamped("ASIUS_CAM_TARGET_GREY", camera.cc.camera_num,
-                                                   default_os04_target_grey(camera.cc.camera_num), 0.05f, 0.75f) :
+                          default_os04_target_grey(camera.cc.camera_num) :
                           std::clamp(0.4f - 0.3f * (float)(log2(1.0 + sens->target_grey_factor*cur_ev_) / log2(6000.0)), 0.1f, 0.4f);
   float target_grey = (1.0f - k_grey) * target_grey_fraction + k_grey * new_target_grey;
 
   const float grey_frac = std::clamp(ae_sample.grey_frac, 1.0f / 256.0f, 1.0f);
   float desired_ev = std::clamp(cur_ev_ * target_grey / grey_frac, sens->min_ev, sens->max_ev);
-  const float desired_ev_before_clip = desired_ev;
-  if (os04 && ae_sample.rgb_clip_hi_frac > 0.0f &&
-      one_cam_env_value("ASIUS_CAM_DISABLE_AE_RGB_CLIP_GUARD", camera.cc.camera_num) == nullptr) {
-    const float clip_limit = getenv_cam_float_clamped("ASIUS_CAM_AE_RGB_CLIP_LIMIT", camera.cc.camera_num,
-                                                      0.08f, 0.001f, 0.50f);
+  if (os04 && ae_sample.rgb_clip_hi_frac > 0.0f) {
+    constexpr float clip_limit = 0.08f;
     if (ae_sample.rgb_clip_hi_frac > clip_limit) {
-      const float response = getenv_cam_float_clamped("ASIUS_CAM_AE_RGB_CLIP_RESPONSE", camera.cc.camera_num,
-                                                     default_os04_ae_rgb_clip_response(camera.cc.camera_num),
-                                                     0.05f, 1.0f);
-      const float min_ratio = getenv_cam_float_clamped("ASIUS_CAM_AE_RGB_CLIP_MIN_RATIO", camera.cc.camera_num,
-                                                      default_os04_ae_rgb_clip_min_ratio(camera.cc.camera_num),
-                                                      0.25f, 1.0f);
+      const float response = default_os04_ae_rgb_clip_response(camera.cc.camera_num);
+      const float min_ratio = default_os04_ae_rgb_clip_min_ratio(camera.cc.camera_num);
       const float clip_ratio = std::clamp(std::pow(clip_limit / ae_sample.rgb_clip_hi_frac, response),
                                           min_ratio, 1.0f);
       desired_ev = std::min(desired_ev, cur_ev_ * clip_ratio);
@@ -2554,7 +1834,7 @@ void CameraState::set_camera_exposure(const Os04AeSample &ae_sample) {
   new_exp_g = 0;
   new_exp_t = 0;
 
-  const int gain_step = os04 ? getenv_cam_int_clamped("ASIUS_CAM_AE_GAIN_STEP", camera.cc.camera_num, 4, 1, 16) : 1;
+  const int gain_step = os04 ? 4 : 1;
   int min_g = std::max(gain_idx - gain_step, sens->analog_gain_min_idx);
   int max_g = std::min(gain_idx + gain_step, sens->analog_gain_max_idx);
   for (int g = min_g; g <= max_g; g++) {
@@ -2572,12 +1852,6 @@ void CameraState::set_camera_exposure(const Os04AeSample &ae_sample) {
   const float new_ev = exposure_time * analog_gain_frac;
   cur_ev[frame_id % 3] = new_ev;
   if (os04) os04_ev_history[frame_id % OS04_AE_HISTORY_SIZE] = new_ev;
-  if (one_cam_env_value("ASIUS_CAM_LOG_AE", camera.cc.camera_num) != nullptr) {
-    LOG("cam %d: OS04 AE grey=%.4f target=%.4f rgb_clip=%.4f cur_ev=%.2f desired_ev=%.2f unclipped_ev=%.2f exp %d->%d gain_idx %d->%d gain %.3f",
-        camera.cc.camera_num, grey_frac, target_grey, ae_sample.rgb_clip_hi_frac,
-        cur_ev_, desired_ev, desired_ev_before_clip,
-        old_exp_t, exposure_time, old_gain_idx, gain_idx, analog_gain_frac);
-  }
   if (exposure_time != old_exp_t || gain_idx != old_gain_idx) {
     camera.set_exposure(exposure_time, gain_idx);
   }
@@ -2589,18 +1863,13 @@ void CameraState::process_pix_frame(int buf_idx, uint64_t timestamp) {
 
   VisionBuf *vb = camera.vipc_server->get_buffer(camera.stream_type, buf_idx);
   if (vb != nullptr) {
-    const bool sample_ae = !one_ae_disabled() && frame_id % one_ae_interval() == 0;
     const bool sample_awb = awb_enabled && frame_id >= (uint32_t)awb_start_frame && frame_id % awb_interval == 0;
-    if (sample_ae || sample_awb) {
-      vb->sync(VISIONBUF_SYNC_FROM_DEVICE);
-      const uint8_t *nv12 = (const uint8_t *)vb->addr;
-      if (sample_ae) {
-        set_camera_exposure(calculate_os04_ae_sample_nv12(nv12, camera.stride, camera.uv_offset,
-                                                          ae_xywh, camera.output_width,
-                                                          camera.output_height, 4, 4));
-      }
-      if (sample_awb) update_awb(nv12);
-    }
+    vb->sync(VISIONBUF_SYNC_FROM_DEVICE);
+    const uint8_t *nv12 = (const uint8_t *)vb->addr;
+    set_camera_exposure(calculate_os04_ae_sample_nv12(nv12, camera.stride, camera.uv_offset,
+                                                      ae_xywh, camera.output_width,
+                                                      camera.output_height, 4, 4));
+    if (sample_awb) update_awb(nv12);
   }
 
   VisionIpcBufExtra extra = {frame_id, timestamp, timestamp_eof};
@@ -2663,17 +1932,12 @@ void camerad_thread() {
   for (auto &cam : cams) {
     cam->camera.queue_all_buffers();
   }
-  const bool forward_start = getenv("ASIUS_CAM_START_FORWARD") != nullptr;
-  const int start_gap_us = getenv_int_clamped("ASIUS_CAM_START_GAP_US", 38000, 0, 1000000);
+  constexpr int start_gap_us = 38000;
   auto stream_one = [&](const std::unique_ptr<CameraState> &cam) {
     cam->camera.stream_on();
-    if (start_gap_us > 0) usleep(start_gap_us);
+    usleep(start_gap_us);
   };
-  if (forward_start) {
-    for (const auto &cam : cams) stream_one(cam);
-  } else {
-    for (auto it = cams.rbegin(); it != cams.rend(); ++it) stream_one(*it);
-  }
+  for (auto it = cams.rbegin(); it != cams.rend(); ++it) stream_one(*it);
 
   LOG("-- One camerad streaming");
 

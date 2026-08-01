@@ -22,7 +22,7 @@ async def _true():
 
 class TestBled(OpenpilotTestCase):
   def test_advertisement_uses_product_name(self):
-    assert bled.Advertisement().LocalName == bled.ASIUS_DEVICE_NAME
+    assert bled.Advertisement().LocalName == bled.DEVICE_NAME
 
   def test_advertisement_refresh_reregisters_after_missing_registration(self, monkeypatch):
     async def run():
