@@ -61,7 +61,7 @@ jobs:
           git submodule update --init --recursive
 
       - name: Stop installed openpilot
-        run: sudo -E python openpilot/system/hardware/openpilot_service.py stop
+        run: python openpilot/system/hardware/openpilot_service.py stop
 
       - name: Verify model assets and build
         timeout-minutes: 30
@@ -117,4 +117,4 @@ jobs:
 
       - name: Restore installed openpilot
         if: always()
-        run: sudo -E python openpilot/system/hardware/openpilot_service.py start
+        run: python openpilot/system/hardware/openpilot_service.py start
