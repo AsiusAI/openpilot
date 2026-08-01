@@ -71,28 +71,17 @@ def and_(*fns):
 def not_(*fns):
   return lambda *args: operator.not_(*(fn(*args) for fn in fns))
 
-comma_livestream_process = or_(and_(livestream, not_(iscar)), notcar)
-v1_livestream_process = or_(livestream, notcar)
-livestream_process = v1_livestream_process if ASIUS_HARDWARE else comma_livestream_process
-
-encoder_binary = "./encoderd"
-camerad_binary = "./camerad"
-encoder_processes = [
-  NativeProcess("encoderd", "openpilot/system/loggerd", [encoder_binary], only_onroad),
-  NativeProcess("stream_encoderd", "openpilot/system/loggerd", [encoder_binary, "--stream"], livestream_process),
-]
-camera_processes = [
-  NativeProcess("camerad", "openpilot/system/camerad", [camerad_binary], or_(driverview, livestream), enabled=not WEBCAM),
-]
+livestream_process = or_(livestream, notcar) if ASIUS_HARDWARE else or_(and_(livestream, not_(iscar)), notcar)
 
 procs = [
   DaemonProcess("manage_athenad", "openpilot.system.athena.manage_athenad", "AthenadPid"),
 
   NativeProcess("loggerd", "openpilot/system/loggerd", ["./loggerd"], logging),
-  *encoder_processes,
+  NativeProcess("encoderd", "openpilot/system/loggerd", ["./encoderd"], only_onroad),
+  NativeProcess("stream_encoderd", "openpilot/system/loggerd", ["./encoderd", "--stream"], livestream_process),
   PythonProcess("logmessaged", "openpilot.system.logmessaged", always_run),
 
-  *camera_processes,
+  NativeProcess("camerad", "openpilot/system/camerad", ["./camerad"], or_(driverview, livestream), enabled=not WEBCAM),
   PythonProcess("webcamerad", "openpilot.system.camerad.webcam.camerad", driverview, enabled=WEBCAM),
   PythonProcess("proclogd", "openpilot.system.proclogd", only_onroad, enabled=platform.system() != "Darwin"),
   PythonProcess("journald", "openpilot.system.journald", only_onroad, platform.system() != "Darwin"),
@@ -100,8 +89,7 @@ procs = [
   PythonProcess("timed", "openpilot.system.timed", always_run, enabled=not PC),
 
   PythonProcess("modeld", "openpilot.selfdrive.modeld.modeld_v1" if ASIUS_HARDWARE else "openpilot.selfdrive.modeld.modeld", only_onroad),
-  PythonProcess("dmonitoringmodeld", "openpilot.selfdrive.modeld.dmonitoringmodeld_v1" if ASIUS_HARDWARE else
-                "openpilot.selfdrive.modeld.dmonitoringmodeld", driverview,
+  PythonProcess("dmonitoringmodeld", "openpilot.selfdrive.modeld.dmonitoringmodeld", driverview,
                 enabled=(WEBCAM or not PC) and not NO_DCAM),
 
   PythonProcess("sensord", "openpilot.system.sensord.sensord", only_onroad, enabled=not PC),

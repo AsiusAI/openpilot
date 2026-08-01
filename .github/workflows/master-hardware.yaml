@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-      - v1
   workflow_dispatch:
 
 concurrency:
@@ -43,25 +42,21 @@ jobs:
       PATH: /usr/local/venv/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       LD_LIBRARY_PATH: /usr/local/lib:/opt/qcom-adreno/lib:/opt/qcom-adreno/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu
     steps:
-      - name: Check out v1
+      - name: Check out master revision
         uses: actions/checkout@v7
         with:
-          ref: v1
+          ref: ${{ github.sha }}
           fetch-depth: 0
           lfs: false
           submodules: recursive
           clean: false
 
-      - name: Merge tested revision
+      - name: Verify dedicated test mode
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin "$GITHUB_SHA"
-          git merge --no-edit "$GITHUB_SHA"
-          git submodule update --init --recursive
-
-      - name: Stop installed openpilot
-        run: python openpilot/system/hardware/openpilot_service.py stop
+          if pgrep -f '[m]anager.py' >/dev/null; then
+            echo "::error::The installed openpilot instance is running on this test device"
+            exit 1
+          fi
 
       - name: Verify model assets and build
         timeout-minutes: 30
@@ -114,7 +109,3 @@ jobs:
           name: ${{ matrix.device }}-health-${{ github.run_id }}
           if-no-files-found: ignore
           path: model_diff.txt
-
-      - name: Restore installed openpilot
-        if: always()
-        run: python openpilot/system/hardware/openpilot_service.py start

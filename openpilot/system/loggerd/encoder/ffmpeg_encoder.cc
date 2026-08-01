@@ -13,6 +13,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/opt.h>
 }
 
 #include "common/swaglog.h"
@@ -45,7 +46,8 @@ FfmpegEncoder::~FfmpegEncoder() {
 }
 
 void FfmpegEncoder::encoder_open() {
-  auto codec_id = encoder_info.get_settings(in_width).encode_type == cereal::EncodeIndex::Type::QCAMERA_H264
+  EncoderSettings encoder_settings = encoder_info.get_settings(in_width);
+  auto codec_id = encoder_settings.encode_type == cereal::EncodeIndex::Type::QCAMERA_H264
                       ? AV_CODEC_ID_H264
                       : AV_CODEC_ID_FFVHUFF;
   const AVCodec *codec = avcodec_find_encoder(codec_id);
@@ -56,6 +58,17 @@ void FfmpegEncoder::encoder_open() {
   this->codec_ctx->height = frame->height;
   this->codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
   this->codec_ctx->time_base = (AVRational){ 1, encoder_info.fps };
+
+  if (codec_id == AV_CODEC_ID_H264) {
+    this->codec_ctx->framerate = (AVRational){ encoder_info.fps, 1 };
+    this->codec_ctx->bit_rate = encoder_settings.bitrate;
+    this->codec_ctx->gop_size = encoder_settings.gop_size;
+    this->codec_ctx->max_b_frames = encoder_settings.b_frames;
+    av_opt_set(this->codec_ctx->priv_data, "preset", "ultrafast", 0);
+    av_opt_set(this->codec_ctx->priv_data, "tune", "zerolatency", 0);
+    av_opt_set(this->codec_ctx->priv_data, "x264-params", "repeat-headers=1", 0);
+  }
+
   int err = avcodec_open2(this->codec_ctx, codec, NULL);
   assert(err >= 0);
 
@@ -72,7 +85,7 @@ void FfmpegEncoder::encoder_close() {
 }
 
 void FfmpegEncoder::set_bitrate(int bitrate) {
-  LOGE("adaptive bitrate is not supported for ffmpeg encoder %s", encoder_info.publish_name);
+  // Dynamic bitrate changes are only supported by the V4L encoder path.
 }
 
 void FfmpegEncoder::request_keyframe() {
@@ -113,7 +126,13 @@ int FfmpegEncoder::encode_frame(VisionBuf* buf, VisionIpcBufExtra *extra) {
     frame->data[1] = cu;
     frame->data[2] = cv;
   }
-  frame->pts = counter*50*1000; // 50ms per frame
+  EncoderSettings encoder_settings = encoder_info.get_settings(in_width);
+  if (encoder_settings.encode_type == cereal::EncodeIndex::Type::QCAMERA_H264) {
+    frame->pts = counter;
+    frame->pict_type = (encoder_settings.gop_size > 0 && counter % encoder_settings.gop_size == 0) ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+  } else {
+    frame->pts = counter*50*1000; // 50ms per frame
+  }
 
   int ret = counter;
 

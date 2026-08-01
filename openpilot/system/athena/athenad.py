@@ -38,7 +38,7 @@ from openpilot.common.basedir import BASEDIR
 from openpilot.common.utils import CallbackReader, get_upload_stream
 from openpilot.common.params import Params
 from openpilot.common.realtime import set_core_affinity
-from openpilot.common.hardware import DEVICE_TYPE, HARDWARE, PC
+from openpilot.common.hardware import HARDWARE, PC
 from openpilot.system.loggerd.config import CAMERA_FPS, SEGMENT_LENGTH
 from openpilot.system.loggerd.xattr_cache import getxattr, setxattr
 from openpilot.tools.lib.helpers import RE
@@ -48,7 +48,7 @@ from openpilot.common.hardware.hw import Paths
 from openpilot.system.athena.rpc import dispatcher, dumps_call, handle, is_call, is_response, loads
 
 
-ATHENA_HOST = os.getenv('ATHENA_HOST', 'wss://athena.comma.ai')
+ATHENA_HOST = Params().get("AthenaHost", return_default=True)
 HANDLER_THREADS = int(os.getenv('HANDLER_THREADS', "4"))
 LOCAL_PORT_WHITELIST = {22, }  # SSH
 
@@ -800,8 +800,6 @@ def startStream(sdp: str, enabled: bool) -> dict:
     with car.CarParams.from_bytes(cp_bytes) as CP:
       if CP.notCar:
         bridge_services_in.append("testJoystick")
-  elif DEVICE_TYPE != "v1":
-    raise Exception("failed to get CarParamsPersistent")
 
   if params.get_bool("IsOffroad"):
     # manager owns camerad/stream_encoderd/webrtcd; flip the param and let it bring them up.

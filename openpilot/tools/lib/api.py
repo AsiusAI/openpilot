@@ -1,9 +1,8 @@
-import os
 import requests
 from requests.adapters import HTTPAdapter, Retry
 from openpilot.common.params import Params
 
-API_HOST = os.getenv("API_HOST") or Params().get("APIHost", return_default=True)
+API_HOST = Params().get("APIHost", return_default=True)
 
 # TODO: this should be merged into common.api
 
