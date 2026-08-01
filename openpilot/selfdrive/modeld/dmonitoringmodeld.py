@@ -20,7 +20,6 @@ from openpilot.selfdrive.modeld.parse_model_outputs import safe_exp, safe_exp_in
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.dmonitoringmodeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
-V1 = DEVICE_TYPE == "v1"
 MODEL_PKL_PATH = MODELS_DIR / 'dmonitoring_model_tinygrad.pkl'
 METADATA_PATH = MODELS_DIR / 'dmonitoring_model_metadata.pkl'
 
@@ -45,7 +44,8 @@ class ModelState:
     self.frame_buf_params = get_nv12_info(cam_w, cam_h)
     self.tensor_inputs = {k: Tensor(v, device='NPY').realize() for k,v in self.numpy_inputs.items()}
     self._blob_cache : dict[int, Tensor] = {}
-    self._uploaded_frame = Tensor.empty(self.frame_buf_params[3], dtype='uint8', device=self.DEV).realize() if V1 and self.DEV.startswith("CL") else None
+    self._uploaded_frame = Tensor.empty(self.frame_buf_params[3], dtype='uint8', device=self.DEV).realize() \
+      if DEVICE_TYPE == "v1" and self.DEV.startswith("CL") else None
     self.model_run = pickle.load(open_file_chunked(str(MODEL_PKL_PATH)))
     with open(MODELS_DIR / f'dm_warp_{cam_w}x{cam_h}_tinygrad.pkl', "rb") as f:
       self.image_warp = pickle.load(f)
@@ -78,8 +78,8 @@ def slice_outputs(model_outputs, output_slices):
   return  {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
 
 def parse_model_output(model_output):
-  sigmoid_fn = sigmoid_inplace if V1 else sigmoid
-  safe_exp_fn = safe_exp_inplace if V1 else safe_exp
+  sigmoid_fn = sigmoid_inplace if DEVICE_TYPE == "v1" else sigmoid
+  safe_exp_fn = safe_exp_inplace if DEVICE_TYPE == "v1" else safe_exp
   parsed = {}
   parsed['wheel_on_right'] = sigmoid_fn(model_output['wheel_on_right'])
   for ds_suffix in ['lhd', 'rhd']:
@@ -118,7 +118,7 @@ def get_driverstate_packet(model_output, frame_id: int, location_ts: int, exec_t
 
 
 def main():
-  config_realtime_process([6, 7] if V1 else 7, 5)
+  config_realtime_process([6, 7] if DEVICE_TYPE == "v1" else 7, 5)
 
   cloudlog.warning("connecting to cabin stream")
   vipc_client = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_CABIN, True)
@@ -130,7 +130,7 @@ def main():
   model = ModelState(vipc_client.width, vipc_client.height)
   cloudlog.warning("models loaded, dmonitoringmodeld starting")
 
-  sm = SubMaster(["liveCalibration"] + (["modelV2"] if V1 else []))
+  sm = SubMaster(["liveCalibration"] + (["modelV2"] if DEVICE_TYPE == "v1" else []))
   pm = PubMaster(["driverStateV2"])
 
   calib = np.zeros(model.numpy_inputs['calib'].size, dtype=np.float32)
@@ -151,7 +151,7 @@ def main():
     if sm.updated["extrinsicsCalibration"]:
       calib[:] = np.array(sm["extrinsicsCalibration"].rpyCalib)
 
-    road_model_active = V1 and sm.alive["modelV2"]
+    road_model_active = DEVICE_TYPE == "v1" and sm.alive["modelV2"]
     run_model = last_model_output is None or not (road_model_active and iteration % 2)
     iteration += 1
     if run_model:

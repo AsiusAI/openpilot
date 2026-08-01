@@ -52,16 +52,19 @@ class TestVamosUpdate(OpenpilotTestCase):
     assert alerts == [False]
 
   def test_should_skip_noop_vamos_fetch(self, monkeypatch) -> None:
+    monkeypatch.setattr(vamos_update, "vamos_update_supported", lambda: True)
     cases = [
-      (True, False, updated.UserRequest.NONE, True),
-      (True, False, updated.UserRequest.CHECK, True),
-      (True, False, updated.UserRequest.FETCH, False),
-      (True, True, updated.UserRequest.NONE, False),
-      (False, False, updated.UserRequest.NONE, False),
+      (False, updated.UserRequest.NONE, True),
+      (False, updated.UserRequest.CHECK, True),
+      (False, updated.UserRequest.FETCH, False),
+      (True, updated.UserRequest.NONE, False),
     ]
-    for vamos, update_available, user_request, expected in cases:
-      with self.subTest(vamos=vamos, update_available=update_available, user_request=user_request):
-        assert vamos_update.should_skip_noop_vamos_fetch(vamos, update_available, user_request, updated.UserRequest.FETCH) is expected
+    for update_available, user_request, expected in cases:
+      with self.subTest(update_available=update_available, user_request=user_request):
+        assert vamos_update.should_skip_noop_vamos_fetch(update_available, user_request, updated.UserRequest.FETCH) is expected
+
+    monkeypatch.setattr(vamos_update, "vamos_update_supported", lambda: False)
+    assert not vamos_update.should_skip_noop_vamos_fetch(False, updated.UserRequest.NONE, updated.UserRequest.FETCH)
 
   def test_vamos_stdout_progress_fallback(self, monkeypatch) -> None:
     progress: list[int] = []
