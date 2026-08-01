@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import os
 import shutil
 import subprocess
 
@@ -16,7 +17,10 @@ def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("action", choices=("start", "stop"))
   args = parser.parse_args()
-  subprocess.run(service_command(args.action), check=True)
+  command = service_command(args.action)
+  if os.geteuid() != 0:
+    command.insert(0, "sudo")
+  subprocess.run(command, check=True)
 
 
 if __name__ == "__main__":
