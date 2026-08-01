@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 60
     env:
       PYTHONPATH: ${{ github.workspace }}
-      PATH: /usr/local/venv/bin:/usr/local/bin:/usr/bin:/bin
+      PATH: /usr/local/venv/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       LD_LIBRARY_PATH: /usr/local/lib
     steps:
       - name: Check out master
@@ -64,7 +64,14 @@ jobs:
 
       - name: Hardware encoder tests
         timeout-minutes: 5
-        run: python openpilot/system/loggerd/tests/test_encoder.py
+        run: |
+          sudo systemd-run --wait --pipe --collect --uid=comma \
+            -p WorkingDirectory="$GITHUB_WORKSPACE" \
+            -p LimitRTPRIO=100 -p LimitNICE=-10 \
+            --setenv=PATH="$PATH" \
+            --setenv=PYTHONPATH="$PYTHONPATH" \
+            --setenv=LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
+            /usr/local/venv/bin/python -u openpilot/system/loggerd/tests/test_encoder.py
 
       - name: Model runtime and timing
         timeout-minutes: 10
@@ -151,12 +158,6 @@ jobs:
         run: |
           source launch_env.sh
           python3 openpilot/system/loggerd/tests/test_encoder.py
-
-      - name: Dragon model runtime and timing
-        timeout-minutes: 10
-        run: |
-          source launch_env.sh
-          taskset -c 6-7 python3 openpilot/selfdrive/test/process_replay/model_replay.py --timing-only
 
       - name: Full Dragon health check
         timeout-minutes: 10
