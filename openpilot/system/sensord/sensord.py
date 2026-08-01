@@ -11,7 +11,7 @@ from openpilot.common.utils import sudo_write
 from openpilot.common.realtime import config_realtime_process, Ratekeeper
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.gpio import gpiochip_get_ro_value_fd, gpioevent_data
-from openpilot.common.hardware import DEVICE_TYPE
+from openpilot.common.hardware import V1
 
 from openpilot.system.sensord.sensors.i2c_sensor import Sensor
 from openpilot.system.sensord.sensors.lsm6ds3_accel import LSM6DS3_Accel
@@ -19,7 +19,7 @@ from openpilot.system.sensord.sensors.lsm6ds3_gyro import LSM6DS3_Gyro
 from openpilot.system.sensord.sensors.lsm6ds3_temp import LSM6DS3_Temp
 
 I2C_BUS_IMU = 1
-IMU_INTERRUPT_PIN = 0 if DEVICE_TYPE == "v1" else 84
+IMU_INTERRUPT_PIN = 0 if V1 else 84
 
 def interrupt_loop(sensors: list[tuple[Sensor, str, bool]], event) -> None:
   pm = messaging.PubMaster([service for sensor, service, interrupt in sensors if interrupt])
