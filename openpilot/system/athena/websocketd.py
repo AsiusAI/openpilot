@@ -19,15 +19,13 @@ from openpilot.common.api import Api
 from openpilot.common.params import Params
 from openpilot.common.realtime import set_core_affinity
 from openpilot.common.swaglog import cloudlog
-from openpilot.system.athena.identity import bytes_to_identity, identity_to_bytes, is_dongle_id
+from openpilot.system.athena.identity import identity_to_bytes, is_dongle_id
 
 
 ATHENA_AUTHORIZED_KEYS_PARAM = "AthenadAuthorizedKeys"
 ATHENA_ACL_EPOCH_PARAM = "AthenadAuthorizedKeysEpoch"
 ATHENA_PAIRING_UNTIL_PARAM = "AthenadPairingUntil"
-GITHUB_SSH_KEYS_PARAM = "GithubSshKeys"
 PARAMS_DIR = Path(os.getenv("PARAMS_DIR", "/data/params/d"))
-GENERATED_SSH_KEY_COMMENT = "asius-app"
 MAX_PAYLOAD_AGE_SECONDS = 60
 PAIRING_MODE_SECONDS = 180
 
@@ -47,45 +45,6 @@ def payload_timestamp_valid(ts: object, max_age_seconds: int = MAX_PAYLOAD_AGE_S
   if not isinstance(ts, (int, float)):
     return False
   return abs(wall_time() - float(ts)) <= max_age_seconds
-
-
-def read_ssh_string(data: bytes, offset: int) -> tuple[bytes, int]:
-  length = int.from_bytes(data[offset:offset + 4], "big")
-  start = offset + 4
-  end = start + length
-  return data[start:end], end
-
-
-def write_ssh_string(data: bytes) -> bytes:
-  return len(data).to_bytes(4, "big") + data
-
-
-def identity_to_ssh_public_key(public_key: str) -> str:
-  raw_public_key = identity_to_bytes(public_key)
-  data = write_ssh_string(b"ssh-ed25519") + write_ssh_string(raw_public_key)
-  return f"ssh-ed25519 {base64.b64encode(data).decode()} {GENERATED_SSH_KEY_COMMENT}:{public_key}"
-
-
-def is_generated_ssh_key(key: str) -> bool:
-  parts = key.split()
-  return len(parts) > 2 and parts[2].startswith(GENERATED_SSH_KEY_COMMENT)
-
-
-def ssh_public_key_to_identity(key: str) -> str | None:
-  try:
-    key_type, encoded, *_ = key.split()
-    if key_type != "ssh-ed25519":
-      return None
-
-    data = base64.b64decode(encoded)
-    parsed_type, offset = read_ssh_string(data, 0)
-    if parsed_type != b"ssh-ed25519":
-      return None
-
-    public_key, _ = read_ssh_string(data, offset)
-    return bytes_to_identity(public_key)
-  except Exception:
-    return None
 
 
 def read_raw_param(key: str) -> str | None:
@@ -166,27 +125,6 @@ def save_authorized_peers(peers: dict[str, dict[str, str | int]]) -> None:
   write_raw_param(ATHENA_AUTHORIZED_KEYS_PARAM, json.dumps(peers))
 
 
-def sync_ssh_keys() -> str:
-  lines = []
-  seen = set()
-  for line in (read_raw_param(GITHUB_SSH_KEYS_PARAM) or "").splitlines():
-    line = line.strip()
-    if not line or is_generated_ssh_key(line) or line in seen:
-      continue
-    lines.append(line)
-    seen.add(line)
-
-  for public_key in sorted(load_authorized_peers()):
-    line = identity_to_ssh_public_key(public_key)
-    if line not in seen:
-      lines.append(line)
-      seen.add(line)
-
-  keys = "\n".join(lines)
-  write_raw_param(GITHUB_SSH_KEYS_PARAM, keys)
-  return keys
-
-
 def authorize_peer(public_key: str, label: str | None = None) -> dict[str, str | int]:
   if not is_dongle_id(public_key):
     raise ValueError("invalid Athena peer key")
@@ -198,7 +136,6 @@ def authorize_peer(public_key: str, label: str | None = None) -> dict[str, str |
   peer["aclEpoch"] = str(bump_acl_epoch())
   peers[public_key] = peer
   save_authorized_peers(peers)
-  sync_ssh_keys()
 
   return peer
 
@@ -367,11 +304,6 @@ def main(exit_event: threading.Event | None = None):
     cloudlog.exception("failed to set core affinity")
 
   params = Params()
-  try:
-    sync_ssh_keys()
-  except Exception:
-    cloudlog.exception("athena.websocket.sync_ssh_keys_failed")
-
   dongle_id = params.get("DongleId")
   athenad.UploadQueueCache.initialize(athenad.upload_queue)
 

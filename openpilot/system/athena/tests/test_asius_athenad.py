@@ -3,16 +3,12 @@ import json
 import multiprocessing
 import os
 import requests
-import select
 import shutil
 import time
 import threading
 import queue
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta
-
-from websocket import ABNF
-from websocket._exceptions import WebSocketConnectionClosedException
 
 from openpilot.cereal import messaging
 from openpilot.common.parameterized import parameterized
@@ -21,7 +17,7 @@ from openpilot.common.test import OpenpilotTestCase
 from openpilot.common.timeout import Timeout
 from openpilot.system.athena import asius_athenad as athenad
 from openpilot.system.athena.asius_athenad import MAX_RETRY_COUNT, UPLOAD_SESS, dispatcher
-from openpilot.system.athena.tests.helpers import HTTPRequestHandler, MockWebsocket, MockApi, EchoSocket
+from openpilot.system.athena.tests.helpers import HTTPRequestHandler, MockApi
 from openpilot.selfdrive.test.helpers import http_server_context
 from openpilot.common.hardware.hw import Paths
 
@@ -48,9 +44,6 @@ def with_upload_handler(func):
       thread.join()
   return wrapper
 
-def mock_create_connection(mocker):
-  return mocker.patch('openpilot.system.athena.asius_athenad.create_connection')
-
 def host():
   with http_server_context(handler=HTTPRequestHandler, setup=seed_athena_server) as (host, port):
     yield f"http://{host}:{port}"
@@ -65,9 +58,7 @@ def send_device_state(end_event):
 class TestAthenadMethods(OpenpilotTestCase):
   @classmethod
   def setup_class(cls):
-    cls.SOCKET_PORT = 45455
     athenad.Api = MockApi  # test double
-    athenad.LOCAL_PORT_WHITELIST = {cls.SOCKET_PORT}
 
   def setup_method(self):
     self.default_params = {
@@ -385,34 +376,6 @@ class TestAthenadMethods(OpenpilotTestCase):
 
     assert athenad.upload_queue.qsize() == 1
     assert asdict(athenad.upload_queue.queue[-1]) == asdict(item1)
-
-  def test_start_local_proxy(self, mocker, mock_create_connection):
-    end_event = threading.Event()
-
-    ws_recv = queue.Queue()
-    ws_send = queue.Queue()
-    mock_ws = MockWebsocket(ws_recv, ws_send)
-    mock_create_connection.return_value = mock_ws
-
-    real_select = select.select
-    select_mock = mocker.patch("openpilot.system.athena.asius_athenad.select.select")
-    select_mock.side_effect = lambda read, write, error, timeout=None: \
-      (read, [], []) if read == (mock_ws.sock,) else real_select(read, write, error, timeout)
-
-    echo_socket = EchoSocket(self.SOCKET_PORT)
-    socket_thread = threading.Thread(target=echo_socket.run)
-    socket_thread.start()
-
-    athenad.startLocalProxy(end_event, 'ws://localhost:1234', self.SOCKET_PORT)
-
-    ws_recv.put_nowait(b'ping')
-    try:
-      recv = ws_send.get(timeout=5)
-      assert recv == (b'ping', ABNF.OPCODE_BINARY), recv
-    finally:
-      # signal websocket close to athenad.ws_proxy_recv
-      ws_recv.put_nowait(WebSocketConnectionClosedException())
-      socket_thread.join()
 
   def test_start_stream_uses_upstream_handler(self, mocker):
     start_stream = mocker.patch("openpilot.system.athena.athenad.startStream", return_value={"sdp": "answer"})

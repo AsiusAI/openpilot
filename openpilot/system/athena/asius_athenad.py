@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 import queue
-import select
 import socket
 import subprocess
 import sys
@@ -24,8 +23,7 @@ from collections.abc import Callable
 
 import requests
 from requests.adapters import HTTPAdapter, DEFAULT_POOLBLOCK
-from websocket import (ABNF, WebSocket, WebSocketTimeoutException,
-                       create_connection)
+from websocket import ABNF, WebSocket, WebSocketTimeoutException
 
 import openpilot.cereal.messaging as messaging
 from openpilot.cereal import log
@@ -38,6 +36,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware.hw import Paths
 from openpilot.system.athena.rpc import Dispatcher, handle
+from openpilot.system.athena.terminal import TerminalManager
 from openpilot.system.athena.websocketd import (
   authorize_peer,
   bump_acl_epoch,
@@ -47,7 +46,6 @@ from openpilot.system.athena.websocketd import (
   pairing_mode_active,
   pairing_url,
   save_authorized_peers,
-  sync_ssh_keys,
   unpack_peer_message,
   verify_pair_token,
 )
@@ -63,7 +61,6 @@ def main(exit_event: threading.Event | None = None) -> None:
 
 
 ATHENA_HOST = Params().get("AthenaHost", return_default=True)
-LOCAL_PORT_WHITELIST = {22, }  # SSH
 
 RECONNECT_TIMEOUT_S = 70
 
@@ -138,7 +135,6 @@ LIVE_STATE_PARAM_KEYS = [
 # https://bytesolutions.com/dscp-tos-cos-precedence-conversion-chart,
 # https://en.wikipedia.org/wiki/Differentiated_services
 UPLOAD_TOS = 0x20  # CS1, low priority background traffic
-SSH_TOS = 0x90  # AF42, DSCP of 36/HDD_LINUX_AC_VI with the minimum delay flag
 
 NetworkType = log.DeviceState.NetworkType
 
@@ -245,7 +241,6 @@ class UploadQueueCache:
 
 def handle_long_poll(ws: WebSocket, exit_event: threading.Event | None) -> None:
   end_event = threading.Event()
-  dispatcher["startLocalProxy"] = partial(startLocalProxy, end_event)
 
   threads = [
     threading.Thread(target=ws_manage, args=(ws, end_event), name='ws_manage'),
@@ -578,41 +573,6 @@ def setRouteViewed(route: str) -> dict[str, int | str]:
   return {"success": 1}
 
 
-def startLocalProxy(global_end_event: threading.Event, remote_ws_uri: str, local_port: int) -> dict[str, int]:
-  try:
-    if local_port not in LOCAL_PORT_WHITELIST:
-      raise Exception("Requested local port not whitelisted")
-
-    cloudlog.debug("athena.startLocalProxy.starting")
-
-    proxy_token = base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("=")
-    ws = create_connection(remote_ws_uri,
-                           cookie="proxy_token=" + proxy_token,
-                           enable_multithread=True)
-
-    # Set TOS to keep connection responsive while under load.
-    ws.sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, SSH_TOS)
-
-    ssock, csock = socket.socketpair()
-    local_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    local_sock.connect(('127.0.0.1', local_port))
-    local_sock.setblocking(False)
-
-    proxy_end_event = threading.Event()
-    threads = [
-      threading.Thread(target=ws_proxy_recv, args=(ws, local_sock, ssock, proxy_end_event, global_end_event)),
-      threading.Thread(target=ws_proxy_send, args=(ws, local_sock, csock, proxy_end_event))
-    ]
-    for thread in threads:
-      thread.start()
-
-    cloudlog.debug("athena.startLocalProxy.started")
-    return {"success": 1}
-  except Exception as e:
-    cloudlog.exception("athenad.startLocalProxy.exception")
-    raise e
-
-
 @dispatcher.add_method
 def getPublicKey() -> str | None:
   _, _, public_key = get_key_pair()
@@ -641,7 +601,6 @@ def removeAuthorizedPeer(publicKey: str) -> dict[str, Any]:
   removed = peers.pop(publicKey, None) is not None
   if removed:
     save_authorized_peers(peers)
-    sync_ssh_keys()
     bump_acl_epoch()
 
   return {"removed": removed, "aclEpoch": get_acl_epoch()}
@@ -671,8 +630,7 @@ def setGithubUsername(username: str) -> dict[str, str]:
   if not username:
     params.remove("GithubUsername")
     params.remove("GithubSshKeys")
-    sync_ssh_keys()
-    return {"GithubUsername": "ok: removed", "GithubSshKeys": "ok: synced"}
+    return {"GithubUsername": "ok: removed", "GithubSshKeys": "ok: removed"}
 
   response = requests.get(f"https://github.com/{username}.keys", timeout=15)
   response.raise_for_status()
@@ -682,8 +640,7 @@ def setGithubUsername(username: str) -> dict[str, str]:
 
   params.put("GithubUsername", username, block=True)
   params.put("GithubSshKeys", keys, block=True)
-  sync_ssh_keys()
-  return {"GithubUsername": "ok", "GithubSshKeys": "ok: synced"}
+  return {"GithubUsername": "ok", "GithubSshKeys": "ok"}
 
 
 @dispatcher.add_method
@@ -1045,10 +1002,13 @@ def send_peer_payload(to: str, body: dict) -> None:
   send_queue.put_nowait(pack_peer_message(dongle_id, recipient, body))
 
 
-def broadcast_peer_notification(name: str, payload: Any) -> None:
+terminal_manager = TerminalManager(send_peer_payload)
+
+
+def broadcast_peer_event(name: str, payload: Any) -> None:
   for public_key in list(load_authorized_peers().keys()):
     try:
-      send_peer_payload(public_key, {"type": "notification", "name": name, "payload": payload})
+      send_peer_payload(public_key, {"type": "event", "name": name, "payload": payload})
     except Exception:
       cloudlog.exception("athena.websocket.broadcast_failed public_key=%s", public_key)
 
@@ -1061,7 +1021,7 @@ def live_state_handler(end_event: threading.Event) -> None:
     try:
       sm.update(0)
       if load_authorized_peers():
-        broadcast_peer_notification("liveState", _live_state_snapshot(sm, params))
+        broadcast_peer_event("liveState", _live_state_snapshot(sm, params))
     except Exception:
       cloudlog.exception("athena.live_state_handler.exception")
     end_event.wait(LIVE_STATE_INTERVAL_S)
@@ -1120,8 +1080,11 @@ def handle_peer_message(data: str) -> bool:
 
     if body.get("type") == "athena-call":
       handle_athena_call(sender, body)
-    elif body.get("type") == "notification":
-      cloudlog.event("athena.websocket.notification", sender=sender, name=body.get("name"), payload=body.get("payload"))
+    elif body.get("type") == "event":
+      if body.get("name") == "terminal":
+        terminal_manager.handle(sender, body.get("payload"))
+      else:
+        cloudlog.event("athena.websocket.event", sender=sender, name=body.get("name"), payload=body.get("payload"))
     elif body.get("method"):
       body["type"] = "athena-call"
       handle_athena_call(sender, body)
@@ -1129,58 +1092,6 @@ def handle_peer_message(data: str) -> bool:
   except Exception:
     cloudlog.exception("athena.websocket.handle_peer_message_failed")
     return True
-
-
-def ws_proxy_recv(ws: WebSocket, local_sock: socket.socket, ssock: socket.socket, end_event: threading.Event, global_end_event: threading.Event) -> None:
-  while not (end_event.is_set() or global_end_event.is_set()):
-    try:
-      sock = ws.sock
-      if sock is None:
-        return
-      r = select.select((sock,), (), (), 30)
-      if r[0]:
-        data = ws.recv()
-        if isinstance(data, str):
-          data = data.encode("utf-8")
-        local_sock.sendall(data)
-    except WebSocketTimeoutException:
-      pass
-    except Exception:
-      cloudlog.exception("athenad.ws_proxy_recv.exception")
-      break
-
-  cloudlog.debug("athena.ws_proxy_recv closing sockets")
-  ssock.close()
-  local_sock.close()
-  ws.close()
-  cloudlog.debug("athena.ws_proxy_recv done closing sockets")
-
-  end_event.set()
-
-
-def ws_proxy_send(ws: WebSocket, local_sock: socket.socket, signal_sock: socket.socket, end_event: threading.Event) -> None:
-  while not end_event.is_set():
-    try:
-      r, _, _ = select.select((local_sock, signal_sock), (), ())
-      if r:
-        if r[0].fileno() == signal_sock.fileno():
-          # got end signal from ws_proxy_recv
-          end_event.set()
-          break
-        data = local_sock.recv(4096)
-        if not data:
-          # local_sock is dead
-          end_event.set()
-          break
-
-        ws.send(data, ABNF.OPCODE_BINARY)
-    except Exception:
-      cloudlog.exception("athenad.ws_proxy_send.exception")
-      end_event.set()
-
-  cloudlog.debug("athena.ws_proxy_send closing sockets")
-  signal_sock.close()
-  cloudlog.debug("athena.ws_proxy_send done closing sockets")
 
 
 def ws_recv(ws: WebSocket, end_event: threading.Event) -> None:
