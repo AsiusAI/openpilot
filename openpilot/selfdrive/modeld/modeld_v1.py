@@ -4,7 +4,7 @@ import os
 from typing import cast
 
 os.environ['GMMU'] = '0' # for usbgpu fast loading, noop for qcom
-from tinygrad.device import Buffer, Device
+from tinygrad.device import Buffer, Device, TinyELF
 from tinygrad.dtype import dtypes
 from tinygrad.runtime.autogen import opencl as cl
 from tinygrad.tensor import Tensor
@@ -116,8 +116,9 @@ class FastCLWarp:
     source, names = FAST_CL_WARP_SOURCE, ("FRAME_ELEMS", "FRAME_PIX", "RING_SLOTS", "HALF_W", "STRIDE", "Y_HEIGHT", "CAM_W", "CAM_H")
     for name, value in zip(names, (frame_elems, half_h * half_w, self.ring_slots, half_w, stride, y_height, cam_w, cam_h), strict=True):
       source = source.replace(name, str(value))
-    arg_dtypes = tuple(((i, dtypes.float32 if i == 6 else dtypes.uint8, None),) for i in range(7))
-    self.program = self.device.runtime("modeld_warp_nv12", source.encode(), arg_dtypes=arg_dtypes)
+    signature = tuple((None, i, dtypes.float32 if i == 6 else dtypes.uint8, ()) for i in range(7))
+    signature += ((None, 7, dtypes.int32, ()),)
+    self.program = self.device.runtime(TinyELF(source.encode(), "modeld_warp_nv12", self.device.renderer.target, signature))
 
   def __call__(self, frame: Tensor, big_frame: Tensor, transforms: dict[str, np.ndarray]) -> tuple[Tensor, Tensor]:
     self.transforms_np[:] = transforms['img'], transforms['big_img']
