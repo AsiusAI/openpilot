@@ -4,10 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 import signal
-import threading
 import time
 from collections.abc import Callable
-from functools import partial
 from typing import Annotated, Any
 
 from dbus_fast import BusType, DBusError, Message, MessageType, PropertyAccess, Variant
@@ -196,7 +194,6 @@ class BlePeerEngine:
     self.peer_clocks: dict[str, tuple[int, float]] = {}
     self.params = Params()
     self.dongle_id = self.params.get("DongleId")
-    self.stop_event = threading.Event()
     self.sm = messaging.SubMaster(athenad.LIVE_STATE_SERVICES)
 
   def receive_frame(self, device: str, frame: bytes) -> None:
@@ -350,8 +347,8 @@ class BlePeerEngine:
         "result": body.get("result"),
         "error": body.get("error"),
       }))
-    elif message_type == "notification":
-      cloudlog.event("asius.bluetooth.notification", sender=sender, name=body.get("name"), payload=body.get("payload"))
+    elif message_type == "event":
+      cloudlog.event("asius.bluetooth.event", sender=sender, name=body.get("name"), payload=body.get("payload"))
 
   async def process_messages(self, stop: asyncio.Event) -> None:
     while not stop.is_set():
@@ -406,14 +403,12 @@ class BlePeerEngine:
           snapshot = athenad._live_state_snapshot(self.sm, self.params)
           for peer in list(self.active_peers):
             if peer in load_authorized_peers():
-              await self.send_body(peer, {"type": "notification", "name": "liveState", "payload": snapshot})
+              await self.send_body(peer, {"type": "event", "name": "liveState", "payload": snapshot})
       except Exception:
         cloudlog.exception("asius.bluetooth.live_state_failed")
       await asyncio.sleep(LIVE_STATE_INTERVAL_SECONDS)
 
   async def run(self, stop: asyncio.Event) -> None:
-    self.stop_event.clear()
-    athenad.dispatcher["startLocalProxy"] = partial(athenad.startLocalProxy, self.stop_event)
     tasks = [
       asyncio.create_task(self.process_messages(stop)),
       asyncio.create_task(self.pairing_approvals(stop)),
@@ -422,7 +417,6 @@ class BlePeerEngine:
     try:
       await stop.wait()
     finally:
-      self.stop_event.set()
       for task in tasks:
         task.cancel()
       await asyncio.gather(*tasks, return_exceptions=True)
