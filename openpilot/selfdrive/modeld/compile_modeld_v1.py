@@ -448,40 +448,43 @@ def _program_argument_types(call) -> tuple[str, ...]:
 
 
 def _replace_program(call, suffix: str, source: str, global_size: tuple[int | float, ...], local_size: tuple[int, ...],
-                     globals_: tuple[int, ...], outs: tuple[int, ...], ins: tuple[int, ...], aux: tuple):
+                     globals_: tuple[int, ...], outs: tuple[int, ...], ins: tuple[int, ...], signature_copies: int = 1):
   from tinygrad.uop.ops import Ops
 
   ast = call.src[0]
   new_arg = dataclasses.replace(ast.arg, name=f"{ast.arg.name}_{suffix}", global_size=global_size,
-                                local_size=local_size, globals=globals_, outs=outs, ins=ins, aux=aux)
+                                local_size=local_size, globals=globals_, outs=outs, ins=ins)
   source = source.replace("KERNEL_NAME", new_arg.function_name)
   binary = source.encode()
   new_nodes = tuple(node.replace(arg=source) if node.op is Ops.SOURCE else
                     node.replace(arg=binary) if node.op is Ops.BINARY else node for node in ast.src)
+  if signature_copies > 1:
+    linear = new_nodes[1]
+    params = tuple(node for node in linear.src if node.op is Ops.PARAM)
+    buffer_count = len(call.src) - 1
+    copies = tuple(node.replace(arg=dataclasses.replace(node.arg, slot=node.arg.slot + copy * buffer_count))
+                   for copy in range(1, signature_copies) for node in params)
+    new_nodes = (new_nodes[0], linear.replace(src=(*linear.src, *copies)), *new_nodes[2:])
   return call.replace(src=(ast.replace(arg=new_arg, src=new_nodes), *call.src[1:]))
 
 
 def _merge_program_calls(calls, suffix: str, source: str, global_size: tuple[int, ...], local_size: tuple[int, ...]):
   base_ast = calls[0].src[0]
   buffer_count = len(calls[0].src) - 1
-  arg_dtypes = []
   outs, ins, buffers = [], [], []
   for copy, call in enumerate(calls):
     ast = call.src[0]
     if len(call.src) - 1 != buffer_count or ast.arg.globals != tuple(range(buffer_count)):
       raise ValueError(f"unsupported arguments for merged kernel {_program_name(call)}")
-    if ast.arg.aux[1:] != base_ast.arg.aux[1:]:
+    if ast.arg.target != base_ast.arg.target:
       raise ValueError(f"incompatible metadata for merged kernel {_program_name(call)}")
     offset = copy * buffer_count
-    arg_dtypes.extend(tuple((index + offset, dtype, shape) for index, dtype, shape in group)
-                      for group in ast.arg.aux[0])
     outs.extend(index + offset for index in ast.arg.outs)
     ins.extend(index + offset for index in ast.arg.ins)
     buffers.extend(call.src[1:])
 
-  aux = (tuple(arg_dtypes), *base_ast.arg.aux[1:])
   merged = _replace_program(calls[0], suffix, source, global_size, local_size,
-                            tuple(range(buffer_count * len(calls))), tuple(outs), tuple(ins), aux)
+                            tuple(range(buffer_count * len(calls))), tuple(outs), tuple(ins), len(calls))
   return merged.replace(src=(merged.src[0], *buffers))
 
 
@@ -533,7 +536,7 @@ def fuse_layer_norm_pairs(jit) -> bool:
     for call in normalized_calls:
       ast = call.src[0]
       normalized = _replace_program(call, "fusedln", FUSED_LN9_SOURCE, (9, 1, 1), (16, 1, 1),
-                                    ast.arg.globals, (0, 2, 3), (1, 4, 5), ast.arg.aux)
+                                    ast.arg.globals, (0, 2, 3), (1, 4, 5))
       fused.append(normalized)
     count += 1
     index += len(pattern)
@@ -593,7 +596,7 @@ def fuse_output_heads(jit) -> bool:
     if len(call.src) != 41 or ast.arg.globals != tuple(range(40)):
       raise ValueError(f"unsupported arguments for fused output head {name}")
     calls[index] = _replace_program(call, "fusedheads", FUSED_OUTPUT_HEAD_SOURCE, (20.15625, 1, 1), (128, 1, 1),
-                                    ast.arg.globals, ast.arg.outs, ast.arg.ins, ast.arg.aux)
+                                    ast.arg.globals, ast.arg.outs, ast.arg.ins)
     replaced += 1
 
   if replaced == 0:
@@ -660,10 +663,6 @@ def _pair_calls(call_a, call_b):
   if ast_a.arg.globals != tuple(range(buffer_count)) or len(call_b.src) - 1 != buffer_count:
     raise ValueError(f"unsupported arguments for paired kernel {_program_name(call_a)}")
 
-  arg_dtypes = ast_a.arg.aux[0]
-  shifted_dtypes = tuple(tuple((index + buffer_count, dtype, shape) for index, dtype, shape in group)
-                           for group in arg_dtypes)
-  aux = (arg_dtypes + shifted_dtypes, *ast_a.arg.aux[1:])
   outs = (*ast_a.arg.outs, *(index + buffer_count for index in ast_b.arg.outs))
   ins = (*ast_a.arg.ins, *(index + buffer_count for index in ast_b.arg.ins))
 
@@ -676,7 +675,7 @@ def _pair_calls(call_a, call_b):
     global_size = (ast_a.arg.global_size[0], ast_a.arg.global_size[1], 2)
     local_size = ast_a.arg.local_size
   paired = _replace_program(call_a, "pairlz" if local_z else "pair", _pair_source(call_a, local_z),
-                            global_size, local_size, tuple(range(buffer_count * 2)), outs, ins, aux)
+                            global_size, local_size, tuple(range(buffer_count * 2)), outs, ins, 2)
   return paired.replace(src=(paired.src[0], *call_a.src[1:], *call_b.src[1:]))
 
 
@@ -751,7 +750,7 @@ def vectorize_qkv_weight_loads(jit) -> bool:
     source = source.replace(scalar_loads, vector_loads)
     source = source.replace(f"__kernel void {ast.arg.function_name}(", "__kernel void KERNEL_NAME(", 1)
     calls[index] = _replace_program(call, "vecweights", source, ast.arg.global_size, ast.arg.local_size,
-                                    ast.arg.globals, ast.arg.outs, ast.arg.ins, ast.arg.aux)
+                                    ast.arg.globals, ast.arg.outs, ast.arg.ins)
     replaced += 1
 
   if replaced == 0:
@@ -787,7 +786,7 @@ def add_reqd_work_group_attrs(jit) -> bool:
     attribute = f"__attribute__((reqd_work_group_size({local_size[0]}, {local_size[1]}, {local_size[2]})))\n__kernel void KERNEL_NAME("
     calls[index] = _replace_program(call, "reqdwg", source.replace(signature, attribute, 1),
                                     ast.arg.global_size, local_size, ast.arg.globals,
-                                    ast.arg.outs, ast.arg.ins, ast.arg.aux)
+                                    ast.arg.outs, ast.arg.ins)
     changed[name] = changed.get(name, 0) + 1
 
   if not changed:

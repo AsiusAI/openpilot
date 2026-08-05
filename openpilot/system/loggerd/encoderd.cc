@@ -212,6 +212,7 @@ void encoderd_thread(const LogCameraInfo (&cameras)[N]) {
 }
 
 int main(int argc, char* argv[]) {
+  const bool stream_mode = argc > 1 && std::string(argv[1]) == "--stream";
 #ifdef __COMMA_HARDWARE__
   if (argc > 1 && std::string(argv[1]) == "--clip") {
     if (argc < 6) {
@@ -243,7 +244,6 @@ int main(int argc, char* argv[]) {
     }
   }
 #endif
-  const bool stream_mode = argc > 1 && std::string(argv[1]) == "--stream";
   if (!Hardware::PC()) {
     int ret;
 #ifdef __ASIUS_HARDWARE__
