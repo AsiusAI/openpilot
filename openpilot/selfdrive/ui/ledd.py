@@ -42,9 +42,6 @@ AudibleAlert: Any = None
 Ratekeeper: Any = None
 log: Any = None
 messaging: Any = None
-get_ble_pairing: Any = None
-
-
 def _pairing_mode_inactive() -> bool:
   return False
 
@@ -441,27 +438,16 @@ def camera_led_brightness(sm) -> int:
 
 
 def pairing_led_channels(brightness: int = 255) -> dict[int, list[int]] | None:
-  from openpilot.system.athena.ble_pairing import PAIRING_COLORS
-
-  pairing = get_ble_pairing()
-  if pairing is None and not pairing_mode_active():
+  if not pairing_mode_active():
     return None
 
-  colors = pairing.get("colors") if pairing is not None else None
-  if not isinstance(colors, list) or len(colors) != 6 or any(color not in PAIRING_COLORS for color in colors):
-    colors = ["turquoise"] * 6 if int(time.monotonic() * 2) % 2 == 0 else ["off"] * 6
-
-  def code_channels(camera_colors: list[str]) -> list[int]:
-    channels = []
-    for color in camera_colors:
-      values = PAIRING_COLORS[color] if color != "off" else (0, 0, 0)
-      channels.extend(round(value * brightness / 255.) for value in values)
-    return channels
+  values = (0, round(255 * brightness / 255.), round(80 * brightness / 255.)) if int(time.monotonic() * 2) % 2 == 0 else (0, 0, 0)
+  channels = list(values) * 3
 
   return {
     1: [0] * len(CAM_LED_CHANNELS),
-    2: code_channels(colors[:3]),
-    3: code_channels(colors[3:]),
+    2: channels,
+    3: channels,
   }
 
 
@@ -514,10 +500,9 @@ def main() -> None:
     led.clear()
     return
 
-  global AudibleAlert, Ratekeeper, get_ble_pairing, log, messaging, pairing_mode_active
+  global AudibleAlert, Ratekeeper, log, messaging, pairing_mode_active
   from openpilot.common.params import Params
   from openpilot.common.realtime import Ratekeeper as OpenpilotRatekeeper
-  from openpilot.system.athena.ble_pairing import get_ble_pairing as athena_get_ble_pairing
   from openpilot.system.athena.websocketd import pairing_mode_active as athena_pairing_mode_active
   try:
     from openpilot.cereal import log as cereal_log, messaging as cereal_messaging
@@ -528,7 +513,6 @@ def main() -> None:
   Ratekeeper = OpenpilotRatekeeper
   log = cereal_log
   messaging = cereal_messaging
-  get_ble_pairing = athena_get_ble_pairing
   pairing_mode_active = athena_pairing_mode_active
   params = Params()
 

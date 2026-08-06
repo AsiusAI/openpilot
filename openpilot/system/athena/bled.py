@@ -9,14 +9,14 @@ from collections.abc import Callable
 from typing import Annotated, Any
 
 from dbus_fast import BusType, DBusError, Message, MessageType, PropertyAccess, Variant
-from dbus_fast.annotations import DBusBool, DBusBytes, DBusDict, DBusObjectPath, DBusSignature, DBusStr
+from dbus_fast.annotations import DBusBool, DBusBytes, DBusDict, DBusObjectPath, DBusSignature, DBusStr, DBusUInt32
 from dbus_fast.aio import MessageBus
 from dbus_fast.service import ServiceInterface, dbus_method, dbus_property
 
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.athena import asius_athenad as athenad
-from openpilot.system.athena.ble_pairing import PAIRING_CHALLENGE_SECONDS, clear_ble_pairing, create_ble_pairing, get_ble_pairing
+from openpilot.system.athena.ble_pairing import authorize_ble_peer
 from openpilot.system.athena.ble_protocol import (
   BLE_RX_UUID,
   BLE_SERVICE_UUID,
@@ -30,6 +30,7 @@ from openpilot.system.athena.ble_protocol import (
 from openpilot.system.athena.websocketd import (
   load_authorized_peers,
   pack_peer_message,
+  pairing_mode_active,
   peer_message_timestamp,
   unpack_peer_message,
 )
@@ -50,12 +51,15 @@ ADVERTISING_MANAGER = "org.bluez.LEAdvertisingManager1"
 ADVERTISEMENT = "org.bluez.LEAdvertisement1"
 ADAPTER = "org.bluez.Adapter1"
 DEVICE = "org.bluez.Device1"
+AGENT_MANAGER = "org.bluez.AgentManager1"
+AGENT = "org.bluez.Agent1"
 
 APPLICATION_PATH = "/ai/asius/ble"
 SERVICE_PATH = f"{APPLICATION_PATH}/service0"
 RX_PATH = f"{SERVICE_PATH}/rx"
 TX_PATH = f"{SERVICE_PATH}/tx"
 ADVERTISEMENT_PATH = "/ai/asius/advertisement0"
+AGENT_PATH = "/ai/asius/agent0"
 
 ACTIVE_PEER_SECONDS = 45.
 LIVE_STATE_INTERVAL_SECONDS = 1.
@@ -105,7 +109,7 @@ class GattCharacteristic(ServiceInterface):
 
 class RxCharacteristic(GattCharacteristic):
   def __init__(self, on_frame: Callable[[str, bytes], None]):
-    super().__init__(BLE_RX_UUID, ["write"])
+    super().__init__(BLE_RX_UUID, ["write", "encrypt-write"])
     self.on_frame = on_frame
 
   @dbus_method()
@@ -116,7 +120,7 @@ class RxCharacteristic(GattCharacteristic):
 
 class TxCharacteristic(GattCharacteristic):
   def __init__(self):
-    super().__init__(BLE_TX_UUID, ["notify"])
+    super().__init__(BLE_TX_UUID, ["notify", "encrypt-read"])
     self.notifying = False
     self.value = b""
     self.send_lock = asyncio.Lock()
@@ -162,6 +166,7 @@ class TxCharacteristic(GattCharacteristic):
 class Advertisement(ServiceInterface):
   def __init__(self):
     super().__init__(ADVERTISEMENT)
+    self.pairing = False
 
   @dbus_property(access=PropertyAccess.READ)
   def Type(self) -> DBusStr:
@@ -169,19 +174,51 @@ class Advertisement(ServiceInterface):
 
   @dbus_property(access=PropertyAccess.READ)
   def ServiceUUIDs(self) -> DBusStrList:
-    return [BLE_SERVICE_UUID]
+    return [BLE_SERVICE_UUID] if self.pairing else []
 
   @dbus_property(access=PropertyAccess.READ)
   def LocalName(self) -> DBusStr:
-    return DEVICE_NAME
+    return DEVICE_NAME if self.pairing else ""
 
   @dbus_property(access=PropertyAccess.READ)
   def Discoverable(self) -> DBusBool:
-    return True
+    return self.pairing
 
   @dbus_method()
   def Release(self):
     cloudlog.warning("asius.bluetooth.advertisement_released")
+
+
+class PairingAgent(ServiceInterface):
+  def __init__(self):
+    super().__init__(AGENT)
+
+  @staticmethod
+  def require_pairing_mode() -> None:
+    if not pairing_mode_active():
+      raise DBusError("org.bluez.Error.Rejected", "physical pairing mode is not active")
+
+  @dbus_method()
+  def Release(self):
+    pass
+
+  @dbus_method()
+  def RequestConfirmation(self, device: DBusObjectPath, passkey: DBusUInt32):
+    self.require_pairing_mode()
+    cloudlog.event("asius.bluetooth.os_pairing", device=device, passkey=passkey)
+
+  @dbus_method()
+  def RequestAuthorization(self, device: DBusObjectPath):
+    self.require_pairing_mode()
+
+  @dbus_method()
+  def AuthorizeService(self, device: DBusObjectPath, uuid: DBusStr):
+    if uuid.lower() != BLE_SERVICE_UUID.lower():
+      raise DBusError("org.bluez.Error.Rejected", "service is not authorized")
+
+  @dbus_method()
+  def Cancel(self):
+    pass
 
 
 class BlePeerEngine:
@@ -269,18 +306,15 @@ class BlePeerEngine:
       raise ValueError("pair request ID is missing")
     label = body.get("label") if isinstance(body.get("label"), str) else None
 
-    state = create_ble_pairing(sender, request_id, label)
+    peer = authorize_ble_peer(sender, request_id, label)
     self.active_peers[sender] = time.monotonic()
-    expires_at = state["expiresAt"]
-    if (peer_timestamp := self.peer_timestamp(sender)) is not None:
-      expires_at = peer_timestamp + PAIRING_CHALLENGE_SECONDS
     await self.send_body(sender, {
-      "type": "ble-pair-challenge",
-      "requestId": request_id,
-      "colors": state["colors"],
-      "expiresAt": expires_at,
+      "type": "pair-response",
+      "publicKey": self.dongle_id,
+      "device-type": DEVICE_TYPE,
+      "aclEpoch": peer["aclEpoch"],
     })
-    cloudlog.event("asius.bluetooth.pairing_challenge", sender=sender, request_id=request_id)
+    cloudlog.event("asius.bluetooth.paired", sender=sender, request_id=request_id)
 
   async def handle_call(self, sender: str, body: dict[str, Any]) -> None:
     if hasattr(athenad, "handle"):
@@ -312,16 +346,12 @@ class BlePeerEngine:
     self.active_peers[sender] = time.monotonic()
     message_type = body.get("type")
     if message_type == "ble-pair-request":
-      sent = await self.send_body(sender, {
+      await self.send_body(sender, {
         "type": "pair-response",
         "publicKey": self.dongle_id,
         "device-type": DEVICE_TYPE,
         "aclEpoch": int(load_authorized_peers()[sender].get("aclEpoch", 0)),
       })
-      approved = get_ble_pairing()
-      if sent and approved is not None and approved.get("status") == "approved" and approved.get("publicKey") == sender:
-        clear_ble_pairing()
-        cloudlog.event("asius.bluetooth.paired", sender=sender, request_id=approved["requestId"])
     elif message_type in ("ble-session", "ble-ping"):
       await self.send_body(sender, {"type": "ble-session", "ready": True})
     elif message_type == "athena-call" or body.get("method"):
@@ -355,30 +385,6 @@ class BlePeerEngine:
         cloudlog.exception("asius.bluetooth.message_failed")
         await self.send_authenticated_error(payload, error)
 
-  async def send_pairing_approval(self) -> bool:
-    approved = get_ble_pairing()
-    if approved is None or approved.get("status") != "approved":
-      return False
-
-    sender = approved["publicKey"]
-    if sender not in self.active_peers:
-      return False
-    sent = await self.send_body(sender, {
-      "type": "pair-response",
-      "publicKey": self.dongle_id,
-      "device-type": DEVICE_TYPE,
-      "aclEpoch": approved["aclEpoch"],
-    })
-    if sent:
-      clear_ble_pairing()
-      cloudlog.event("asius.bluetooth.paired", sender=sender, request_id=approved["requestId"])
-    return sent
-
-  async def pairing_approvals(self, stop: asyncio.Event) -> None:
-    while not stop.is_set():
-      await self.send_pairing_approval()
-      await asyncio.sleep(0.1)
-
   async def live_state(self, stop: asyncio.Event) -> None:
     while not stop.is_set():
       try:
@@ -397,7 +403,6 @@ class BlePeerEngine:
   async def run(self, stop: asyncio.Event) -> None:
     tasks = [
       asyncio.create_task(self.process_messages(stop)),
-      asyncio.create_task(self.pairing_approvals(stop)),
       asyncio.create_task(self.live_state(stop)),
     ]
     try:
@@ -438,10 +443,13 @@ async def set_adapter_property(bus: MessageBus, adapter: str, name: str, value: 
   await checked_call(bus, method_call(adapter, DBUS_PROPERTIES, "Set", "ssv", [ADAPTER, name, value]))
 
 
-async def register_bluez(bus: MessageBus, adapter: str) -> None:
+async def register_bluez(bus: MessageBus, adapter: str, advertisement: Advertisement) -> None:
   await set_adapter_property(bus, adapter, "Powered", Variant("b", True))
   await set_adapter_property(bus, adapter, "Alias", Variant("s", DEVICE_NAME))
-  await set_adapter_property(bus, adapter, "Pairable", Variant("b", False))
+  advertisement.pairing = pairing_mode_active()
+  await set_adapter_property(bus, adapter, "Pairable", Variant("b", advertisement.pairing))
+  await checked_call(bus, method_call("/org/bluez", AGENT_MANAGER, "RegisterAgent", "os", [AGENT_PATH, "NoInputNoOutput"]))
+  await checked_call(bus, method_call("/org/bluez", AGENT_MANAGER, "RequestDefaultAgent", "o", [AGENT_PATH]))
   await checked_call(bus, method_call(adapter, GATT_MANAGER, "RegisterApplication", "oa{sv}", [APPLICATION_PATH, {}]))
   await checked_call(bus, method_call(adapter, ADVERTISING_MANAGER, "RegisterAdvertisement", "oa{sv}", [ADVERTISEMENT_PATH, {}]))
 
@@ -455,6 +463,10 @@ async def unregister_bluez(bus: MessageBus, adapter: str) -> None:
       await checked_call(bus, method_call(adapter, interface, member, "o", [path]))
     except Exception:
       pass
+  try:
+    await checked_call(bus, method_call("/org/bluez", AGENT_MANAGER, "UnregisterAgent", "o", [AGENT_PATH]))
+  except Exception:
+    pass
 
 
 async def connected_device_count(bus: MessageBus, adapter: str) -> int:
@@ -473,15 +485,20 @@ async def refresh_advertisement(bus: MessageBus, adapter: str) -> None:
   await checked_call(bus, method_call(adapter, ADVERTISING_MANAGER, "RegisterAdvertisement", "oa{sv}", [ADVERTISEMENT_PATH, {}]))
 
 
-async def keep_advertising(bus: MessageBus, adapter: str, stop: asyncio.Event) -> None:
+async def keep_advertising(bus: MessageBus, adapter: str, advertisement: Advertisement, stop: asyncio.Event) -> None:
   connected = -1
+  pairing: bool | None = None
   while not stop.is_set():
     try:
       current = await connected_device_count(bus, adapter)
-      if current != connected:
+      current_pairing = pairing_mode_active()
+      if current != connected or current_pairing != pairing:
+        advertisement.pairing = current_pairing
+        await set_adapter_property(bus, adapter, "Pairable", Variant("b", current_pairing))
         await refresh_advertisement(bus, adapter)
         connected = current
-        cloudlog.event("asius.bluetooth.advertisement_refreshed", connected=current)
+        pairing = current_pairing
+        cloudlog.event("asius.bluetooth.advertisement_refreshed", connected=current, pairing=current_pairing)
     except Exception:
       cloudlog.exception("asius.bluetooth.advertisement_refresh_failed")
     try:
@@ -502,18 +519,20 @@ async def run_bluez(stop: asyncio.Event) -> None:
       tx = TxCharacteristic()
       engine = BlePeerEngine(tx)
       rx = RxCharacteristic(engine.receive_frame)
+      advertisement = Advertisement()
 
       bus.export(SERVICE_PATH, service)
       bus.export(RX_PATH, rx)
       bus.export(TX_PATH, tx)
-      bus.export(ADVERTISEMENT_PATH, Advertisement())
+      bus.export(ADVERTISEMENT_PATH, advertisement)
+      bus.export(AGENT_PATH, PairingAgent())
 
       adapter = await find_adapter(bus)
-      await register_bluez(bus, adapter)
+      await register_bluez(bus, adapter, advertisement)
       cloudlog.event("asius.bluetooth.ready", adapter=adapter, service_uuid=BLE_SERVICE_UUID)
 
       engine_task = asyncio.create_task(engine.run(stop))
-      advertising_task = asyncio.create_task(keep_advertising(bus, adapter, stop))
+      advertising_task = asyncio.create_task(keep_advertising(bus, adapter, advertisement, stop))
       await stop.wait()
     except Exception:
       cloudlog.exception("asius.bluetooth.service_failed")

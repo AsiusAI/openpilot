@@ -21,8 +21,20 @@ async def _true():
 
 
 class TestBled(OpenpilotTestCase):
-  def test_advertisement_uses_product_name(self):
-    assert bled.Advertisement().LocalName == bled.DEVICE_NAME
+  def test_advertisement_only_identifies_product_in_pairing_mode(self):
+    advertisement = bled.Advertisement()
+    assert advertisement.LocalName == ""
+    assert advertisement.ServiceUUIDs == []
+    assert not advertisement.Discoverable
+
+    advertisement.pairing = True
+    assert advertisement.LocalName == bled.DEVICE_NAME
+    assert advertisement.ServiceUUIDs == [bled.BLE_SERVICE_UUID]
+    assert advertisement.Discoverable
+
+  def test_gatt_requires_an_encrypted_link(self):
+    assert "encrypt-write" in bled.RxCharacteristic(lambda _device, _frame: None).Flags
+    assert "encrypt-read" in bled.TxCharacteristic().Flags
 
   def test_advertisement_refresh_reregisters_after_missing_registration(self, monkeypatch):
     async def run():
@@ -40,68 +52,8 @@ class TestBled(OpenpilotTestCase):
 
     asyncio.run(run())
 
-  def test_pairing_approval_waits_for_active_peer(self, monkeypatch):
+  def test_authorized_pairing_retry_delivers_response(self, monkeypatch):
     async def run():
-      approved = {
-        "status": "approved",
-        "publicKey": APP_KEY,
-        "requestId": "request-1",
-        "aclEpoch": 4,
-      }
-      cleared = []
-      engine = make_engine()
-
-      monkeypatch.setattr(bled, "get_ble_pairing", lambda: approved)
-      monkeypatch.setattr(bled, "clear_ble_pairing", lambda: cleared.append(True))
-
-      async def send_body(*_args, **_kwargs):
-        raise AssertionError("inactive peer must not receive approval")
-
-      engine.send_body = send_body
-      assert not await engine.send_pairing_approval()
-      assert cleared == []
-
-    asyncio.run(run())
-
-  def test_pairing_approval_is_retained_until_delivered(self, monkeypatch):
-    async def run():
-      approved = {
-        "status": "approved",
-        "publicKey": APP_KEY,
-        "requestId": "request-1",
-        "aclEpoch": 4,
-      }
-      cleared = []
-      sent = []
-      engine = make_engine()
-      engine.active_peers[APP_KEY] = 1.0
-
-      monkeypatch.setattr(bled, "get_ble_pairing", lambda: approved)
-      monkeypatch.setattr(bled, "clear_ble_pairing", lambda: cleared.append(True))
-
-      async def send_body(recipient, body, initial=False):
-        sent.append((recipient, body, initial))
-        return len(sent) > 1
-
-      engine.send_body = send_body
-      assert not await engine.send_pairing_approval()
-      assert cleared == []
-      assert await engine.send_pairing_approval()
-      assert cleared == [True]
-      assert sent[-1][1]["type"] == "pair-response"
-      assert sent[-1][1]["aclEpoch"] == 4
-
-    asyncio.run(run())
-
-  def test_authorized_pairing_retry_delivers_and_clears_approval(self, monkeypatch):
-    async def run():
-      approved = {
-        "status": "approved",
-        "publicKey": APP_KEY,
-        "requestId": "request-1",
-        "aclEpoch": 4,
-      }
-      cleared = []
       sent = []
       engine = make_engine()
 
@@ -111,8 +63,6 @@ class TestBled(OpenpilotTestCase):
         False,
       ))
       monkeypatch.setattr(bled, "load_authorized_peers", lambda: {APP_KEY: {"aclEpoch": 4}})
-      monkeypatch.setattr(bled, "get_ble_pairing", lambda: approved)
-      monkeypatch.setattr(bled, "clear_ble_pairing", lambda: cleared.append(True))
 
       async def send_body(recipient, body, initial=False):
         sent.append((recipient, body, initial))
@@ -121,7 +71,7 @@ class TestBled(OpenpilotTestCase):
       engine.send_body = send_body
       await engine.handle_encrypted(b"authenticated-envelope")
       assert sent[-1][1]["type"] == "pair-response"
-      assert cleared == [True]
+      assert sent[-1][1]["aclEpoch"] == 4
 
     asyncio.run(run())
 
@@ -194,21 +144,17 @@ class TestBled(OpenpilotTestCase):
         sender, recipient, body, timestamp
       ))
 
-      assert await engine.send_body(APP_KEY, {"type": "ble-pair-challenge"})
-      assert sent == [((DEVICE_KEY, APP_KEY, {"type": "ble-pair-challenge"}, 1_700_000_005), False)]
+      assert await engine.send_body(APP_KEY, {"type": "ble-session"})
+      assert sent == [((DEVICE_KEY, APP_KEY, {"type": "ble-session"}, 1_700_000_005), False)]
 
     asyncio.run(run())
 
-  def test_ble_pairing_expiry_uses_peer_time(self, monkeypatch):
+  def test_pairing_request_immediately_authorizes_and_responds(self, monkeypatch):
     async def run():
       engine = make_engine()
-      engine.peer_clocks[APP_KEY] = (1_700_000_000, 100.0)
       sent = []
       monkeypatch.setattr(bled.time, "monotonic", lambda: 105.0)
-      monkeypatch.setattr(bled, "create_ble_pairing", lambda *_args: {
-        "colors": ["red", "green", "blue", "amber", "turquoise", "violet"],
-        "expiresAt": 1_300,
-      })
+      monkeypatch.setattr(bled, "authorize_ble_peer", lambda *_args: {"aclEpoch": 4})
 
       async def send_body(recipient, body, initial=False):
         sent.append((recipient, body, initial))
@@ -220,6 +166,12 @@ class TestBled(OpenpilotTestCase):
         "requestId": "request-1",
       })
 
-      assert sent[0][1]["expiresAt"] == 1_700_000_005 + bled.PAIRING_CHALLENGE_SECONDS
+      assert engine.active_peers[APP_KEY] == 105.0
+      assert sent == [(APP_KEY, {
+        "type": "pair-response",
+        "publicKey": DEVICE_KEY,
+        "device-type": bled.DEVICE_TYPE,
+        "aclEpoch": 4,
+      }, False)]
 
     asyncio.run(run())
