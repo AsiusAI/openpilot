@@ -664,6 +664,80 @@ def getNetworks():
   return HARDWARE.get_networks()
 
 
+TAILSCALE_COMMAND = ["sudo", "-n", "tailscale"]
+TAILSCALE_SOCKET = Path("/var/run/tailscale/tailscaled.sock")
+TAILSCALE_ENABLED = Path("/data/tailscale/enabled")
+
+
+@dispatcher.add_method
+def getTailscaleState() -> dict[str, Any]:
+  if not TAILSCALE_SOCKET.exists():
+    return {"running": False, "connected": False, "user": None}
+  try:
+    raw = subprocess.check_output([*TAILSCALE_COMMAND, "status", "--json"], stderr=subprocess.STDOUT, encoding="utf-8", timeout=5)
+    status = json.loads(raw)
+  except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+    return {"running": False, "connected": False, "user": None, "error": str(e)}
+
+  connected = status.get("BackendState") == "Running"
+  self_state = status.get("Self", {})
+  user_id = str(self_state.get("UserID", ""))
+  user = status.get("User", {}).get(user_id, {}).get("LoginName") or status.get("CurrentTailnet", {}).get("Name") if connected else None
+
+  return {
+    "running": True,
+    "connected": connected,
+    "user": user,
+    "backendState": status.get("BackendState", "Unknown"),
+    "authUrl": status.get("AuthURL") or None,
+    "ips": status.get("TailscaleIPs", []),
+    "hostname": self_state.get("HostName") or None,
+    "dnsName": self_state.get("DNSName") or None,
+    "online": bool(self_state.get("Online")),
+    "relay": self_state.get("Relay") or None,
+    "keyExpiry": self_state.get("KeyExpiry") or None,
+  }
+
+
+@dispatcher.add_method
+def configureTailscale(disconnect: bool = False) -> str | None:
+  if disconnect:
+    subprocess.run([*TAILSCALE_COMMAND, "logout"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    subprocess.run(["sudo", "-n", "rm", "-f", str(TAILSCALE_ENABLED)], check=True)
+    subprocess.run(["sudo", "-n", "sv", "down", "tailscaled"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["sudo", "-n", "sv", "down", "tailscaled/log"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return None
+
+  subprocess.run(["sudo", "-n", "install", "-d", "-m", "700", str(TAILSCALE_ENABLED.parent)], check=True)
+  subprocess.run(["sudo", "-n", "touch", str(TAILSCALE_ENABLED)], check=True)
+  subprocess.run(["sudo", "-n", "rm", "-f", "/var/service/tailscaled/down"], check=True)
+  subprocess.run(["sudo", "-n", "rm", "-f", "/var/service/tailscaled/log/down"], check=True)
+  subprocess.run(["sudo", "-n", "sv", "up", "tailscaled/log"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+  subprocess.run(["sudo", "-n", "sv", "up", "tailscaled"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+  for _ in range(50):
+    if TAILSCALE_SOCKET.exists():
+      break
+    time.sleep(0.1)
+
+  state = getTailscaleState()
+  if state["connected"]:
+    return None
+  if state.get("authUrl"):
+    return cast(str, state["authUrl"])
+
+  subprocess.run(
+    [*TAILSCALE_COMMAND, "login", "--accept-dns=false", "--ssh=false", "--timeout=1s"],
+    check=False,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    timeout=3,
+  )
+  state = getTailscaleState()
+  if state.get("authUrl"):
+    return cast(str, state["authUrl"])
+  raise RuntimeError("Tailscale did not provide a login URL")
+
+
 def _local_ips() -> list[dict[str, str]]:
   try:
     output = subprocess.check_output(["ip", "-j", "addr", "show"], encoding="utf-8")

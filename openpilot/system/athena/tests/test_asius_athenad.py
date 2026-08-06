@@ -134,6 +134,30 @@ class TestAthenadMethods(OpenpilotTestCase):
       end_event.set()
       p.join()
 
+  def test_get_tailscale_state(self, mocker):
+    mocker.patch.object(athenad.Path, "exists", return_value=True)
+    mocker.patch.object(athenad.subprocess, "check_output", return_value=json.dumps({
+      "BackendState": "Running",
+      "Self": {"UserID": 42, "HostName": "asius-v1", "DNSName": "asius-v1.example.ts.net.", "Online": True, "Relay": "hel"},
+      "User": {"42": {"LoginName": "user@example.com"}},
+      "AuthURL": "",
+      "TailscaleIPs": ["100.64.0.1"],
+    }))
+
+    status = dispatcher["getTailscaleState"]()
+
+    assert status["running"] is True
+    assert status["connected"] is True
+    assert status["user"] == "user@example.com"
+    assert status["dnsName"] == "asius-v1.example.ts.net."
+    assert status["relay"] == "hel"
+
+  def test_configure_tailscale_disconnect(self, mocker):
+    run = mocker.patch.object(athenad.subprocess, "run")
+
+    assert dispatcher["configureTailscale"](True) is None
+    assert run.call_count == 4
+
   def test_list_data_directory(self):
     route = '2021-03-29--13-32-47'
     segments = [0, 1, 2, 3, 11]
