@@ -75,6 +75,28 @@ class TestBled(OpenpilotTestCase):
 
     asyncio.run(run())
 
+  def test_ble_ping_echoes_identifier(self, monkeypatch):
+    async def run():
+      engine = make_engine()
+      sent = []
+      monkeypatch.setattr(bled, "unpack_peer_message", lambda *_args, **_kwargs: (
+        APP_KEY,
+        {"type": "ble-ping", "id": "ping-1"},
+        False,
+      ))
+      monkeypatch.setattr(bled, "load_authorized_peers", lambda: {APP_KEY: {}})
+
+      async def send_body(recipient, body, initial=False):
+        sent.append((recipient, body, initial))
+        return True
+
+      engine.send_body = send_body
+      await engine.handle_encrypted(b"authenticated-envelope")
+
+      assert sent == [(APP_KEY, {"type": "ble-pong", "id": "ping-1"}, False)]
+
+    asyncio.run(run())
+
   def test_authenticated_pairing_error_preserves_request_id(self, monkeypatch):
     async def run():
       engine = make_engine()

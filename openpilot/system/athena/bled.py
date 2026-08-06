@@ -352,8 +352,10 @@ class BlePeerEngine:
         "device-type": DEVICE_TYPE,
         "aclEpoch": int(load_authorized_peers()[sender].get("aclEpoch", 0)),
       })
-    elif message_type in ("ble-session", "ble-ping"):
+    elif message_type == "ble-session":
       await self.send_body(sender, {"type": "ble-session", "ready": True})
+    elif message_type == "ble-ping":
+      await self.send_body(sender, {"type": "ble-pong", "id": body.get("id")})
     elif message_type == "athena-call" or body.get("method"):
       await self.handle_call(sender, body)
     elif message_type == "athena-response":

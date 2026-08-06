@@ -1,13 +1,15 @@
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 
 import capnp
+import pytest
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.cereal import messaging, log
 from teleoprtc.tracks import VIDEO_CLOCK_RATE
 
-from openpilot.system.webrtc.webrtcd import CerealOutgoingMessageProxy, CerealIncomingMessageProxy
+from openpilot.system.webrtc.webrtcd import CerealOutgoingMessageProxy, CerealIncomingMessageProxy, ServerState, handle_get_stream
 from openpilot.system.webrtc.device.video import V4L2_BUF_FLAG_KEYFRAME, LiveStreamVideoStreamTrack, _normalize_h264_start_codes
 
 
@@ -114,3 +116,39 @@ class TestStreamSession(OpenpilotTestCase):
 
     assert bytes(packet) == b"keyframe"
     assert sock.receive.call_count == 2
+
+  def test_multiple_stream_sessions_remain_connected(self, mocker):
+    sessions = []
+
+    class FakeStreamSession:
+      def __init__(self, body):
+        self.identifier = f"stream-{len(sessions)}"
+        self.enabled = body.enabled
+        self.run_task = None
+        self.stop_count = 0
+        sessions.append(self)
+
+      async def get_answer(self):
+        return SimpleNamespace(sdp="answer", type="answer")
+
+      def start(self):
+        self.run_task = asyncio.create_task(asyncio.Event().wait())
+
+      async def stop(self):
+        self.stop_count += 1
+        if self.run_task is not None:
+          self.run_task.cancel()
+          with pytest.raises(asyncio.CancelledError):
+            await self.run_task
+
+    mocker.patch("openpilot.system.webrtc.webrtcd.StreamSession", FakeStreamSession)
+    state = ServerState()
+    body = json.dumps({"sdp": "offer", "cameras": ["wideRoad"], "enabled": True}).encode()
+
+    self.loop.run_until_complete(handle_get_stream(state, body))
+    self.loop.run_until_complete(handle_get_stream(state, body))
+
+    assert len(state.streams) == 2
+    assert sessions[0].stop_count == 0
+    for session in sessions:
+      self.loop.run_until_complete(session.stop())
