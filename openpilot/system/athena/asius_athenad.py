@@ -1102,22 +1102,7 @@ def live_state_handler(end_event: threading.Event) -> None:
 
 
 def handle_athena_call(sender: str, body: dict) -> None:
-  request_id = body.get("id")
-  request = {
-    "jsonrpc": "2.0",
-    "id": request_id,
-    "method": body.get("method"),
-  }
-  if "params" in body:
-    request["params"] = body["params"]
-
-  response = json.loads(handle(request, dispatcher))
-  send_peer_payload(sender, {
-    "type": "athena-response",
-    "id": request_id,
-    "result": response.get("result"),
-    "error": response.get("error"),
-  })
+  send_peer_payload(sender, json.loads(handle(body, dispatcher)))
 
 
 def handle_peer_message(data: str) -> bool:

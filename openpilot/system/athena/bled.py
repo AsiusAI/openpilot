@@ -283,25 +283,11 @@ class BlePeerEngine:
     cloudlog.event("asius.bluetooth.pairing_challenge", sender=sender, request_id=request_id)
 
   async def handle_call(self, sender: str, body: dict[str, Any]) -> None:
-    request_id = body.get("id")
-    request: dict[str, Any] = {
-      "jsonrpc": "2.0",
-      "id": request_id,
-      "method": body.get("method"),
-    }
-    if "params" in body:
-      request["params"] = body["params"]
-
     if hasattr(athenad, "handle"):
-      response = await asyncio.to_thread(lambda: json.loads(athenad.handle(request, athenad.dispatcher)))
+      response = await asyncio.to_thread(lambda: json.loads(athenad.handle(body, athenad.dispatcher)))
     else:
-      response = await asyncio.to_thread(lambda: json.loads(athenad.JSONRPCResponseManager.handle(json.dumps(request), athenad.dispatcher).json))
-    await self.send_body(sender, {
-      "type": "athena-response",
-      "id": request_id,
-      "result": response.get("result"),
-      "error": response.get("error"),
-    })
+      response = await asyncio.to_thread(lambda: json.loads(athenad.JSONRPCResponseManager.handle(json.dumps(body), athenad.dispatcher).json))
+    await self.send_body(sender, response)
 
   async def handle_encrypted(self, payload: bytes) -> None:
     if self.dongle_id is None:
