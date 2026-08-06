@@ -1,28 +1,27 @@
 import subprocess
-
-import pytest
+import unittest
+from unittest.mock import patch
 
 from openpilot.system.athena import asius_athenad as athenad
 
 
-def test_nmcli_uses_noninteractive_sudo(mocker):
-  check_output = mocker.patch("openpilot.system.athena.asius_athenad.subprocess.check_output", return_value="connected\n")
+class TestNmcli(unittest.TestCase):
+  @patch("openpilot.system.athena.asius_athenad.subprocess.check_output", return_value="connected\n")
+  def test_nmcli_uses_noninteractive_sudo(self, check_output):
+    self.assertEqual(athenad._nmcli(["device", "wifi", "connect", "test"]), "connected\n")
+    check_output.assert_called_once_with(
+      ["sudo", "-n", "nmcli", "device", "wifi", "connect", "test"],
+      stderr=subprocess.STDOUT,
+      encoding="utf-8",
+    )
 
-  assert athenad._nmcli(["device", "wifi", "connect", "test"]) == "connected\n"
-  check_output.assert_called_once_with(
-    ["sudo", "-n", "nmcli", "device", "wifi", "connect", "test"],
-    stderr=subprocess.STDOUT,
-    encoding="utf-8",
-  )
+  @patch("openpilot.system.athena.asius_athenad.subprocess.check_output")
+  def test_nmcli_redacts_password_but_preserves_error(self, check_output):
+    password = "do-not-log-this"
+    check_output.side_effect = subprocess.CalledProcessError(10, ["nmcli"], output=f"connection failed for {password}")
 
+    with self.assertRaises(Exception) as context:
+      athenad._nmcli(["device", "wifi", "connect", "test", "password", password], sensitive=True)
 
-def test_nmcli_redacts_password_but_preserves_error(mocker):
-  password = "do-not-log-this"
-  error = subprocess.CalledProcessError(10, ["nmcli"], output=f"connection failed for {password}")
-  mocker.patch("openpilot.system.athena.asius_athenad.subprocess.check_output", side_effect=error)
-
-  with pytest.raises(Exception) as exc_info:
-    athenad._nmcli(["device", "wifi", "connect", "test", "password", password], sensitive=True)
-
-  assert password not in str(exc_info.value)
-  assert "connection failed for <redacted>" in str(exc_info.value)
+    self.assertNotIn(password, str(context.exception))
+    self.assertTrue("connection failed for <redacted>" in str(context.exception))
