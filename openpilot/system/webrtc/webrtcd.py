@@ -421,16 +421,6 @@ async def handle_get_stream(state: ServerState, raw_body: bytes, content_type: s
     if enabled and not body.enabled:
       return _json_response({"error": "busy", "message": "someone else is connected."})
 
-    for sid, s in list(stream_dict.items()):
-      if s.run_task and not s.run_task.done():
-        try:
-          ch = s.stream.get_messaging_channel()
-          ch.send(json.dumps({"type": "disconnect", "data": "Another device has connected, closing this session."}))
-        except Exception:
-          pass
-      await s.stop()
-      stream_dict.pop(sid, None)
-
     session = StreamSession(body)
     stream_dict[session.identifier] = session
     try:
