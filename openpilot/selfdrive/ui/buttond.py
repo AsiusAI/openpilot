@@ -124,7 +124,6 @@ class PowerButton:
 def main() -> None:
   from openpilot.common.realtime import Ratekeeper
   from openpilot.common.swaglog import cloudlog
-  from openpilot.system.athena.ble_pairing import approve_ble_pairing
   from openpilot.system.athena.websocketd import enable_pairing_mode
 
   parser = argparse.ArgumentParser()
@@ -146,12 +145,8 @@ def main() -> None:
   while not done:
     for action in button.poll():
       if action == ButtonAction.PAIR:
-        approved = approve_ble_pairing()
-        if approved is not None:
-          cloudlog.event("asius.button.pairing_approved", public_key=approved["publicKey"], request_id=approved["requestId"])
-        else:
-          pairing_until = enable_pairing_mode()
-          cloudlog.event("asius.button.pairing_mode", pairing_until=pairing_until)
+        pairing_until = enable_pairing_mode()
+        cloudlog.event("asius.button.pairing_mode", pairing_until=pairing_until)
     rk.keep_time()
 
   button.close()

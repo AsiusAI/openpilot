@@ -105,7 +105,6 @@ class TestLedd(OpenpilotTestCase):
         assert updated == [board.name for board in leds.boards[missing_count:]]
 
   def test_pairing_feedback_exclusively_controls_all_camera_leds(self, monkeypatch):
-    monkeypatch.setattr(ledd, "get_ble_pairing", lambda: None)
     monkeypatch.setattr(ledd, "pairing_mode_active", lambda: True)
     monkeypatch.setattr(ledd.time, "monotonic", lambda: 10.0)
     channels = ledd.pairing_led_channels()
@@ -117,15 +116,6 @@ class TestLedd(OpenpilotTestCase):
 
     monkeypatch.setattr(ledd.time, "monotonic", lambda: 10.5)
     assert ledd.pairing_led_channels() == {1: [0] * 9, 2: [0] * 9, 3: [0] * 9}
-
-  def test_pairing_color_code_uses_six_distinct_leds_on_cam2_and_cam3(self, monkeypatch):
-    monkeypatch.setattr(ledd, "get_ble_pairing", lambda: {"colors": ["red", "green", "blue", "amber", "turquoise", "violet"]})
-    monkeypatch.setattr(ledd, "pairing_mode_active", lambda: False)
-    assert ledd.pairing_led_channels() == {
-      1: [0] * 9,
-      2: [255, 0, 0, 0, 255, 0, 0, 0, 255],
-      3: [255, 80, 0, 0, 255, 80, 150, 0, 255],
-    }
 
   def test_camera_led_brightness_matches_openpilot_screen_mapping(self):
     cases = [(100., 76), (50., 109), (0., 255)]
