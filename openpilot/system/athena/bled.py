@@ -27,6 +27,7 @@ from openpilot.system.athena.ble_protocol import (
   FrameError,
   encode_frames,
 )
+from openpilot.system.athena.terminal import TerminalManager
 from openpilot.system.athena.websocketd import (
   load_authorized_peers,
   pack_peer_message,
@@ -63,6 +64,7 @@ AGENT_PATH = "/ai/asius/agent0"
 
 ACTIVE_PEER_SECONDS = 45.
 LIVE_STATE_INTERVAL_SECONDS = 1.
+TERMINAL_OUTPUT_QUEUE_SIZE = 64
 NOTIFICATION_FRAME_DELAY_SECONDS = 0.004
 REGISTER_RETRY_SECONDS = 3.
 DEVICE_TYPE = "asius-v1"
@@ -232,6 +234,21 @@ class BlePeerEngine:
     self.params = Params()
     self.dongle_id = self.params.get("DongleId")
     self.sm = messaging.SubMaster(athenad.LIVE_STATE_SERVICES)
+    self.loop: asyncio.AbstractEventLoop | None = None
+    self.terminal_output: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(maxsize=TERMINAL_OUTPUT_QUEUE_SIZE)
+    self.terminal_manager = TerminalManager(self.queue_terminal_output)
+
+  def queue_terminal_output(self, peer: str, body: dict[str, Any]) -> None:
+    if self.loop is None:
+      return
+
+    def enqueue() -> None:
+      try:
+        self.terminal_output.put_nowait((peer, body))
+      except asyncio.QueueFull:
+        cloudlog.event("asius.bluetooth.terminal_output_full", peer=peer, error=True)
+
+    self.loop.call_soon_threadsafe(enqueue)
 
   def receive_frame(self, device: str, frame: bytes) -> None:
     try:
@@ -366,7 +383,20 @@ class BlePeerEngine:
         "error": body.get("error"),
       }))
     elif message_type == "event":
-      cloudlog.event("asius.bluetooth.event", sender=sender, name=body.get("name"), payload=body.get("payload"))
+      if body.get("name") == "terminal":
+        self.terminal_manager.handle(sender, body.get("payload"))
+      else:
+        cloudlog.event("asius.bluetooth.event", sender=sender, name=body.get("name"), payload=body.get("payload"))
+
+  async def send_terminal_output(self, stop: asyncio.Event) -> None:
+    while not stop.is_set():
+      try:
+        peer, body = await asyncio.wait_for(self.terminal_output.get(), timeout=0.5)
+        await self.send_body(peer, body)
+      except TimeoutError:
+        pass
+      except Exception:
+        cloudlog.exception("asius.bluetooth.terminal_output_failed")
 
   async def process_messages(self, stop: asyncio.Event) -> None:
     while not stop.is_set():
@@ -403,9 +433,11 @@ class BlePeerEngine:
       await asyncio.sleep(LIVE_STATE_INTERVAL_SECONDS)
 
   async def run(self, stop: asyncio.Event) -> None:
+    self.loop = asyncio.get_running_loop()
     tasks = [
       asyncio.create_task(self.process_messages(stop)),
       asyncio.create_task(self.live_state(stop)),
+      asyncio.create_task(self.send_terminal_output(stop)),
     ]
     try:
       await stop.wait()

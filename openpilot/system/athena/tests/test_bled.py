@@ -97,6 +97,24 @@ class TestBled(OpenpilotTestCase):
 
     asyncio.run(run())
 
+  def test_terminal_event_routes_to_terminal_manager(self, monkeypatch):
+    async def run():
+      engine = make_engine()
+      handled = []
+      engine.terminal_manager = type("Terminal", (), {"handle": lambda _self, peer, payload: handled.append((peer, payload))})()
+      monkeypatch.setattr(bled, "unpack_peer_message", lambda *_args, **_kwargs: (
+        APP_KEY,
+        {"type": "event", "name": "terminal", "payload": {"action": "open", "sessionId": "terminal-1"}},
+        False,
+      ))
+      monkeypatch.setattr(bled, "load_authorized_peers", lambda: {APP_KEY: {}})
+
+      await engine.handle_encrypted(b"authenticated-envelope")
+
+      assert handled == [(APP_KEY, {"action": "open", "sessionId": "terminal-1"})]
+
+    asyncio.run(run())
+
   def test_authenticated_pairing_error_preserves_request_id(self, monkeypatch):
     async def run():
       engine = make_engine()
