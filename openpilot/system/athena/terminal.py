@@ -10,7 +10,8 @@ import subprocess
 import termios
 import threading
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 
 MAX_INPUT_BYTES = 16 * 1024
