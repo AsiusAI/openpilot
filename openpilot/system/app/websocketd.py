@@ -25,7 +25,7 @@ ATHENA_AUTHORIZED_KEYS_PARAM = "AthenadAuthorizedKeys"
 ATHENA_PAIRING_UNTIL_PARAM = "AthenadPairingUntil"
 PARAMS_DIR = Path(os.getenv("PARAMS_DIR", "/data/params/d"))
 MAX_PAYLOAD_AGE_SECONDS = 60
-PAIRING_MODE_SECONDS = 180
+PAIRING_MODE_SECONDS = 300
 
 def base64url_encode(data: bytes) -> str:
   return base64.urlsafe_b64encode(data).decode().rstrip("=")
