@@ -15,15 +15,9 @@ CAMERA_CONFIGS = [
   (_os_fisheye.width, _os_fisheye.height),        # mici: 1344x760
 ]
 
-Import('env', 'arch', 'V1')
+Import('env', 'arch', 'ASIUS_HARDWARE')
 chunker_file = File("#openpilot/common/file_chunker.py")
 lenv = env.Clone()
-v1_gpu_lock = File("models/.v1_gpu_compile.lock").abspath
-
-def serialize_v1_gpu(node):
-  if V1:
-    lenv.SideEffect(v1_gpu_lock, node)
-  return node
 
 tinygrad_root = env.Dir("#").abspath
 tinygrad_files = ["#"+x for x in glob.glob(env.Dir("#tinygrad_repo").relpath + "/**", recursive=True, root_dir=tinygrad_root)
@@ -34,18 +28,14 @@ def estimate_pickle_max_size(onnx_size):
   # the ONNX size. Overestimating only adds an empty trailing chunk.
   return 2.0 * onnx_size + 10 * 1024 * 1024
 
-if V1:
-  tg_backend = 'CL'
-  tg_flags = ' '.join([
-    'DEV=CL', 'FLOAT16=1', 'NOLOCALS=1', 'JIT_BATCH_SIZE=0', 'OPENPILOT_HACKS=1',
-  ])
-elif arch == 'comma_arm64':
+if arch == 'comma_arm64':
   tg_backend = 'QCOM'
   tg_flags = f'DEV={tg_backend} IMAGE=1 FLOAT16=1 NOLOCALS=1 JIT_BATCH_SIZE=0 OPENPILOT_HACKS=1'
 else:
   camera_configs = [(c.width, c.height) for c in (_ar_ox_fisheye, _os_fisheye)]
   tg_backend = 'CPU'
   tg_flags = f'DEV=CPU' if arch == 'Darwin' else 'DEV=CPU:LLVM'
+driving_tg_flags = tg_flags.replace(' NOLOCALS=1', '') if ASIUS_HARDWARE else tg_flags
 
 tg_devices = { # which device to put jit inputs to at runtime
   'openpilot.selfdrive.modeld.dmonitoringmodeld': {
@@ -53,7 +43,7 @@ tg_devices = { # which device to put jit inputs to at runtime
   },
 }
 
-USBGPU = usbgpu_present() and not V1
+USBGPU = usbgpu_present()
 if USBGPU:
   usbgpu_tg_flags = f'DEBUG=2 DEV=USB+AMD:LLVM WARP_DEV={tg_backend} FLOAT16=1 JIT_BATCH_SIZE=0 GMMU=0 TC_OPT=2'
   # the USB+AMD GPU takes an exclusive flock; serialize all targets that touch it
@@ -74,27 +64,24 @@ tg_devices_node = lenv.Command(
 mac_brew_string = f'HOME={os.path.expanduser("~")}' if arch == 'Darwin' else ''
 
 modeld_dir = Dir("#openpilot/selfdrive/modeld").abspath
-compile_modeld_filename = "compile_modeld_v1.py" if V1 else "compile_modeld.py"
 compile_modeld_script = [
-  File(f"{modeld_dir}/{compile_modeld_filename}"),
+  File(f"{modeld_dir}/compile_modeld.py"),
   File(f"{modeld_dir}/get_model_metadata.py"),
   File("#openpilot/system/camerad/cameras/nv12_info.py"),
   File("#openpilot/common/hardware/hw.py"),
 ]
-if V1:
-  compile_modeld_script.append(File(f"{modeld_dir}/compile_modeld.py"))
 model_w, model_h = MEDMODEL_INPUT_SIZE
 frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
 
-for chestnut in [False, True] if CHESTNUT else [False]:
-  target_pkl_path = File(modeld_pkl_path(chestnut)).abspath
-  file_prefix, cmd_flags = ('big_', chestnut_tg_flags) if chestnut else ('', tg_flags)
+for usbgpu in [False, True] if USBGPU else [False]:
+  target_pkl_path = File(modeld_pkl_path(usbgpu)).abspath
+  # BIG_INTO_SMALL=1 builds the default target from the big model, e.g. to test it without a USB GPU
+  file_prefix, cmd_flags = ('big_', usbgpu_tg_flags) if usbgpu else ('big_' if os.getenv('BIG_INTO_SMALL') else '', driving_tg_flags)
   driving_onnx_deps = get_existing_chunks(File(f"models/{file_prefix}driving_supercombo.onnx").abspath)
-  model_size_arg = '' if V1 else f'--model-size {model_w}x{model_h}'
-  camera_res_args = '' if V1 else '--camera-resolutions ' + ' '.join(f'{cw}x{ch}' for cw, ch in CAMERA_CONFIGS)
-  cmd = (f'{cmd_flags} {mac_brew_string} python3 {modeld_dir}/{compile_modeld_filename} '
-        f'{model_size_arg} '
-        f'{camera_res_args} '
+  camera_res_args = ' '.join(f'{cw}x{ch}' for cw, ch in CAMERA_CONFIGS)
+  cmd = (f'{cmd_flags} {mac_brew_string} python3 {modeld_dir}/compile_modeld.py '
+        f'--model-size {model_w}x{model_h} '
+        f'--camera-resolutions {camera_res_args} '
         f'--onnx {File(f"models/{file_prefix}driving_supercombo.onnx").abspath} '
         f'--output {target_pkl_path} --frame-skip {frame_skip}')
   onnx_sizes_sum = sum(os.path.getsize(f) for f in driving_onnx_deps)
@@ -115,11 +102,11 @@ for chestnut in [False, True] if CHESTNUT else [False]:
   def do_chunk(target, source, env, pkl=target_pkl_path, chunks=chunk_targets):
     chunk_file(pkl, chunks)
   actions = Action(do_compile, "  [USBGPU] $TARGET") if usbgpu else [cmd, Action(do_chunk, "  [CHUNK] $TARGET")]
-  node = serialize_v1_gpu(lenv.Command(
+  node = lenv.Command(
     chunk_targets,
     tinygrad_files + compile_modeld_script + driving_onnx_deps + [Value(camera_res_args), Value(chunk_targets), chunker_file],
     actions,
-  ))
+  )
   if usbgpu:
     lenv.SideEffect(usbgpu_lock, node)
 
@@ -127,7 +114,7 @@ for chestnut in [False, True] if CHESTNUT else [False]:
 fn = File(f"models/dmonitoring_model").abspath
 script_files = [File(Dir("#openpilot/selfdrive/modeld").File("get_model_metadata.py").abspath)]
 cmd = f'{tg_flags} {mac_brew_string} python3 {Dir("#openpilot/selfdrive/modeld").abspath}/get_model_metadata.py {fn}.onnx'
-serialize_v1_gpu(lenv.Command(fn + "_metadata.pkl", [fn + ".onnx"] + tinygrad_files + script_files + [tg_devices_node], cmd))
+lenv.Command(fn + "_metadata.pkl", [fn + ".onnx"] + tinygrad_files + script_files + [tg_devices_node], cmd)
 
 dm_w, dm_h = DM_INPUT_SIZE
 compile_dm_warp_script = [File(f"{modeld_dir}/compile_dm_warp.py")]
@@ -136,7 +123,7 @@ for cam_w, cam_h in camera_configs:
   cmd = (f'{tg_flags} {mac_brew_string} python3 {modeld_dir}/compile_dm_warp.py '
          f'--camera-resolution {cam_w}x{cam_h} --warp-to {dm_w}x{dm_h} '
          f'--output {dm_pkl_path}')
-  serialize_v1_gpu(lenv.Command(dm_pkl_path, tinygrad_files + compile_dm_warp_script + compile_modeld_script + [tg_devices_node], cmd))
+  lenv.Command(dm_pkl_path, tinygrad_files + compile_dm_warp_script + compile_modeld_script + [tg_devices_node], cmd)
 
 def tg_compile(flags, model_name):
   pythonpath_string = 'PYTHONPATH="${PYTHONPATH}:' + env.Dir("#tinygrad_repo").abspath + '"'
@@ -153,4 +140,4 @@ def tg_compile(flags, model_name):
      Action(do_chunk, "  [CHUNK] $TARGET")],
   )
 
-serialize_v1_gpu(tg_compile(tg_flags, 'dmonitoring_model'))
+tg_compile(tg_flags, 'dmonitoring_model')
