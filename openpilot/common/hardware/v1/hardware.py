@@ -84,22 +84,7 @@ class Asius(Tici):
 
   def set_power_save(self, powersave_enabled):
     _set_gpu_power_save(powersave_enabled)
-
-    for i in range(4, 8):
-      val = '0' if powersave_enabled else '1'
-      sudo_write(val, f'/sys/devices/system/cpu/cpu{i}/online')
-
-    for policy in ('0', '4'):
-      if powersave_enabled and policy == '4':
-        continue
-      governor = 'ondemand' if powersave_enabled else 'performance'
-      _sudo_write_if_exists(governor, f'/sys/devices/system/cpu/cpufreq/policy{policy}/scaling_governor')
-      if not powersave_enabled:
-        sudo_write('1689600', f'/sys/devices/system/cpu/cpufreq/policy{policy}/scaling_max_freq')
-
-    _affine_irq(7, "kgsl-3d0")
-    for action in ("a5", "cci", "cpas_camnoc", "cpas-cdm", "csid", "ife", "csid-lite", "ife-lite"):
-      _affine_irq(6, action)
+    super().set_power_save(powersave_enabled)
 
   def initialize_hardware(self):
     subprocess.run("sudo chmod a+w /dev/kmsg", shell=True)
