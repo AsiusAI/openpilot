@@ -89,7 +89,7 @@ procs = [
   PythonProcess("micd", "openpilot.system.micd", iscar),
   PythonProcess("timed", "openpilot.system.timed", always_run, enabled=not PC),
 
-  PythonProcess("modeld", "openpilot.selfdrive.modeld.modeld_v1" if ASIUS_HARDWARE else "openpilot.selfdrive.modeld.modeld", only_onroad),
+  PythonProcess("modeld", "openpilot.selfdrive.modeld.modeld", only_onroad),
 
   PythonProcess("dmonitoringmodeld", "openpilot.selfdrive.modeld.dmonitoringmodeld", driverview,
                 enabled=(WEBCAM or not PC) and not NO_DCAM),

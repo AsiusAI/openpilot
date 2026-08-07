@@ -38,12 +38,7 @@ def estimate_pickle_max_size(onnx_size):
 if V1:
   tg_backend = 'CL'
   tg_flags = ' '.join([
-    f'{v1_compile_env}DEV=CL', 'MODEL_DIRECT_IMAGES=1', 'FLOAT16=1',
-    'MODEL_FUSE_LAYERNORM=1', 'MODEL_FUSE_ATTENTION_LAYERNORM=1',
-    'MODEL_FUSE_OUTPUT_HEADS=1', 'MODEL_FUSE_ADJACENT=1',
-    'MODEL_VECTORIZE_QKV_WEIGHTS=1',
-    'MODEL_REQD_WORKGROUP_ATTR_KERNELS=r_16_64_32_4_4_24_3_3',
-    'NOLOCALS=1', 'JIT_BATCH_SIZE=0', 'OPENPILOT_HACKS=1',
+    f'{v1_compile_env}DEV=CL', 'FLOAT16=1', 'NOLOCALS=1', 'JIT_BATCH_SIZE=0', 'OPENPILOT_HACKS=1',
   ])
 elif arch == 'comma_arm64':
   tg_backend = 'QCOM'
@@ -59,9 +54,9 @@ tg_devices = { # which device to put jit inputs to at runtime
   },
 }
 
-CHESTNUT = chestnut_present()
-if CHESTNUT:
-  chestnut_tg_flags = 'DEBUG=1 DEV=USB+AMD:LLVM FRAME_DEV=CPU FLOAT16=1 JIT_BATCH_SIZE=0 GMMU=0 TC_OPT=2 TC_MIN_GLOBALS=32'
+USBGPU = usbgpu_present() and not V1
+if USBGPU:
+  usbgpu_tg_flags = f'DEBUG=2 DEV=USB+AMD:LLVM WARP_DEV={tg_backend} FLOAT16=1 JIT_BATCH_SIZE=0 GMMU=0 TC_OPT=2'
   # the USB+AMD GPU takes an exclusive flock; serialize all targets that touch it
   chestnut_lock = File("models/.chestnut.lock").abspath
 
@@ -87,6 +82,8 @@ compile_modeld_script = [
   File("#openpilot/system/camerad/cameras/nv12_info.py"),
   File("#openpilot/common/hardware/hw.py"),
 ]
+if V1:
+  compile_modeld_script.append(File(f"{modeld_dir}/compile_modeld.py"))
 model_w, model_h = MEDMODEL_INPUT_SIZE
 frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
 
@@ -94,10 +91,11 @@ for chestnut in [False, True] if CHESTNUT else [False]:
   target_pkl_path = File(modeld_pkl_path(chestnut)).abspath
   file_prefix, cmd_flags = ('big_', chestnut_tg_flags) if chestnut else ('', tg_flags)
   driving_onnx_deps = get_existing_chunks(File(f"models/{file_prefix}driving_supercombo.onnx").abspath)
-  camera_res_args = ' '.join(f'{cw}x{ch}' for cw, ch in CAMERA_CONFIGS)
+  model_size_arg = '' if V1 else f'--model-size {model_w}x{model_h}'
+  camera_res_args = '' if V1 else '--camera-resolutions ' + ' '.join(f'{cw}x{ch}' for cw, ch in CAMERA_CONFIGS)
   cmd = (f'{cmd_flags} {mac_brew_string} python3 {modeld_dir}/{compile_modeld_filename} '
-        f'--model-size {model_w}x{model_h} '
-        f'--camera-resolutions {camera_res_args} '
+        f'{model_size_arg} '
+        f'{camera_res_args} '
         f'--onnx {File(f"models/{file_prefix}driving_supercombo.onnx").abspath} '
         f'--output {target_pkl_path} --frame-skip {frame_skip}')
   onnx_sizes_sum = sum(os.path.getsize(f) for f in driving_onnx_deps)
