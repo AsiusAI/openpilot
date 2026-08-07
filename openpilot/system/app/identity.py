@@ -1,14 +1,13 @@
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat, load_pem_public_key
-
-from openpilot.system.app.api import get_key_pair
-from openpilot.common.hardware.hw import Paths
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat, load_pem_private_key, load_pem_public_key
 
 BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 ED25519_KEY_BYTES = 32
 DONGLE_ID_LEN = 44
+PRIVATE_KEY_PATH = Path("/data/persist/comma/id_ed25519")
+PUBLIC_KEY_PATH = Path("/data/persist/comma/id_ed25519.pub")
 
 
 def base58_encode(value: int) -> str:
@@ -73,19 +72,31 @@ def public_key_from_dongle_id(dongle_id: str) -> str:
   return key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo).decode()
 
 
+def get_device_private_key() -> ed25519.Ed25519PrivateKey:
+  key = load_pem_private_key(PRIVATE_KEY_PATH.read_bytes(), password=None)
+  if not isinstance(key, ed25519.Ed25519PrivateKey):
+    raise ValueError("device identity key is not Ed25519")
+  return key
+
+
+def get_device_public_key() -> str | None:
+  try:
+    return PUBLIC_KEY_PATH.read_text()
+  except OSError:
+    return None
+
+
 def get_or_create_device_identity() -> str:
-  _, _, public_key = get_key_pair()
+  public_key = get_device_public_key()
   if public_key is None:
-    private_key_path = Path(Paths.persist_root()) / "comma" / "id_ed25519"
-    public_key_path = private_key_path.with_suffix(".pub")
-    private_key_path.parent.mkdir(parents=True, exist_ok=True)
+    PRIVATE_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     private_key = ed25519.Ed25519PrivateKey.generate()
-    private_key_path.write_bytes(private_key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
-    private_key_path.chmod(0o600)
+    PRIVATE_KEY_PATH.write_bytes(private_key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
+    PRIVATE_KEY_PATH.chmod(0o600)
 
     public_key_bytes = private_key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
-    public_key_path.write_bytes(public_key_bytes)
+    PUBLIC_KEY_PATH.write_bytes(public_key_bytes)
     public_key = public_key_bytes.decode()
 
   return dongle_id_from_public_key(public_key)

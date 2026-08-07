@@ -12,14 +12,13 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, load_pem_private_key
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 from websocket import WebSocketException, create_connection
 
-from openpilot.system.app.api import Api
 from openpilot.common.params import Params
 from openpilot.common.realtime import set_core_affinity
 from openpilot.common.swaglog import cloudlog
-from openpilot.system.app.identity import identity_to_bytes, is_dongle_id
+from openpilot.system.app.identity import get_device_private_key, identity_to_bytes, is_dongle_id
 
 
 ATHENA_AUTHORIZED_KEYS_PARAM = "AthenadAuthorizedKeys"
@@ -128,12 +127,7 @@ def stable_json(value) -> str:
 
 
 def identity_private_key() -> ed25519.Ed25519PrivateKey:
-  from openpilot.system.app.api import get_key_pair
-  _, private_key, _ = get_key_pair()
-  key = load_pem_private_key(private_key.encode(), password=None)
-  if not isinstance(key, ed25519.Ed25519PrivateKey):
-    raise ValueError("Athena identity key is not Ed25519")
-  return key
+  return get_device_private_key()
 
 
 def sign_jwt(payload: dict, expiry_seconds: int) -> str:
@@ -290,8 +284,6 @@ def main(exit_event: threading.Event | None = None):
   dongle_id = params.get("DongleId")
   methods.UploadQueueCache.initialize(methods.upload_queue)
 
-  api = Api(dongle_id)
-
   conn_start = None
   conn_retries = 0
   while exit_event is None or not exit_event.is_set():
@@ -299,7 +291,7 @@ def main(exit_event: threading.Event | None = None):
       if conn_start is None:
         conn_start = time.monotonic()
 
-      token = api.get_token()
+      token = sign_jwt({"identity": dongle_id}, 60 * 60)
       ws_uri = methods.ATHENA_HOST + "/ws/v2/" + dongle_id + "?token=" + token
       token_header = jwt.get_unverified_header(token)
       cloudlog.event("athenad.main.connecting_ws", ws_uri=methods.ATHENA_HOST + "/ws/v2/" + dongle_id, retries=conn_retries,

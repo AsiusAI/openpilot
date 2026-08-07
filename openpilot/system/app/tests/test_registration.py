@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption,
 
 from openpilot.common.params import Params
 from openpilot.common.test import OpenpilotTestCase
+from openpilot.system.app import identity
 from openpilot.system.app.identity import (
   DONGLE_ID_LEN,
   dongle_id_from_public_key,
@@ -16,7 +17,6 @@ from openpilot.system.app.registration import (
   register,
   UNREGISTERED_DONGLE_ID,
 )
-from openpilot.common.hardware.hw import Paths
 
 
 class TestRegistration(OpenpilotTestCase):
@@ -24,14 +24,13 @@ class TestRegistration(OpenpilotTestCase):
   def setup_method(self):
     self.params = Params()
 
-    persist_root = Path(self.enterContext(tempfile.TemporaryDirectory())) / "persist"
-    self.enterContext(mock.patch.object(Paths, "persist_root", staticmethod(lambda: str(persist_root))))
-
-    persist_dir = Path(Paths.persist_root()) / "comma"
+    persist_dir = Path(self.enterContext(tempfile.TemporaryDirectory())) / "persist" / "comma"
     persist_dir.mkdir(parents=True, exist_ok=True)
 
     self.priv_key = persist_dir / "id_ed25519"
     self.pub_key = persist_dir / "id_ed25519.pub"
+    self.enterContext(mock.patch.object(identity, "PRIVATE_KEY_PATH", self.priv_key))
+    self.enterContext(mock.patch.object(identity, "PUBLIC_KEY_PATH", self.pub_key))
 
   def _generate_keys(self) -> str:
     key = ed25519.Ed25519PrivateKey.generate()

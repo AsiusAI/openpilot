@@ -28,7 +28,7 @@ from websocket import ABNF, WebSocket, WebSocketTimeoutException
 import openpilot.cereal.messaging as messaging
 from openpilot.cereal import log
 from openpilot.cereal.services import SERVICE_LIST
-from openpilot.system.app.api import get_key_pair
+from openpilot.system.app.identity import get_device_public_key
 from openpilot.common.utils import CallbackReader, get_upload_stream
 from openpilot.common.params import Params
 from openpilot.common.hardware import HARDWARE
@@ -575,8 +575,7 @@ def setRouteViewed(route: str) -> dict[str, int | str]:
 
 @dispatcher.add_method
 def getPublicKey() -> str | None:
-  _, _, public_key = get_key_pair()
-  return public_key
+  return get_device_public_key()
 
 
 @dispatcher.add_method
