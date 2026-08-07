@@ -14,7 +14,7 @@ def tmp_path():
 class TestVamosUpdate(OpenpilotTestCase):
   @staticmethod
   def write_manifest(tmp_path: Path, version: str) -> None:
-    manifest = tmp_path / "openpilot/system/hardware/asius/vamos.json"
+    manifest = tmp_path / "openpilot/system/hardware/v1/vamos.json"
     manifest.parent.mkdir(parents=True)
     manifest.write_text(json.dumps({"version": version}))
 
@@ -32,7 +32,7 @@ class TestVamosUpdate(OpenpilotTestCase):
     assert alerts == [True]
     assert commands == [[
       "sudo", "/usr/bin/vamos-update", "install",
-      str(tmp_path / "openpilot/system/hardware/asius/vamos.json"),
+      str(tmp_path / "openpilot/system/hardware/v1/vamos.json"),
       "--defer-activation",
     ]]
 
