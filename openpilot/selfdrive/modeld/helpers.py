@@ -5,12 +5,24 @@ import shutil
 import struct
 import tempfile
 from pathlib import Path
+from typing import cast
 
+from tinygrad.device import Buffer, Device
+from tinygrad.tensor import Tensor
 from openpilot.common.file_chunker import get_manifest_path
 from openpilot.common.hardware.usb import CHESTNUT_FW_VERSION, CHESTNUT_USB_IDS, USB_DEVICES_PATH
 
 MODELS_DIR = Path(__file__).resolve().parent / 'models'
 TG_INPUT_DEVICES_PATH = MODELS_DIR / 'tg_input_devices.json'
+
+
+def tensor_from_dma_buf(ptr: int, fd: int | None, size: int, device: str) -> Tensor:
+  if fd is None or device.split(':', 1)[0] != 'QCOM':
+    return Tensor.from_blob(ptr, (size,), dtype='uint8', device=device)
+  tensor = Tensor.empty(size, dtype='uint8', device=device)
+  buffer = cast(Buffer, tensor.uop.buffer)
+  buffer.allocate(Device[device].iface.map(ptr, buffer.nbytes, fd), external_ptr=ptr)
+  return tensor
 
 
 def get_tg_input_devices(process_name: str, usbgpu: bool):
