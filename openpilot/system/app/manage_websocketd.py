@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from openpilot.system.app.manager import manage
+from openpilot.system.athena.manage_athenad import manage
 
 
 def main() -> None:

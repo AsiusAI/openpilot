@@ -8,11 +8,6 @@ from openpilot.system.app.identity import get_or_create_device_identity
 
 UNREGISTERED_DONGLE_ID = "UnregisteredDevice"
 
-def is_registered_device() -> bool:
-  dongle = Params().get("DongleId")
-  return dongle not in (None, UNREGISTERED_DONGLE_ID)
-
-
 def register(show_spinner=False) -> str | None:
   params = Params()
   try:

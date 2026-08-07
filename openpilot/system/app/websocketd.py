@@ -1,7 +1,6 @@
 import base64
 import json
 import os
-import random
 import threading
 import time
 from hashlib import sha512
@@ -17,6 +16,7 @@ from websocket import WebSocketException, create_connection
 from openpilot.common.params import Params
 from openpilot.common.realtime import set_core_affinity
 from openpilot.common.swaglog import cloudlog
+from openpilot.system.athena.athenad import backoff
 from openpilot.system.app.identity import get_device_private_key, identity_to_bytes, is_dongle_id
 
 
@@ -220,10 +220,6 @@ def peer_message_timestamp(data: str) -> int | None:
     return None
 
 
-def backoff(retries: int) -> int:
-  return random.randrange(0, min(128, int(2 ** retries)))
-
-
 def main(exit_event: threading.Event | None = None):
   from openpilot.system.app import methods
 
@@ -239,6 +235,7 @@ def main(exit_event: threading.Event | None = None):
   conn_start = None
   conn_retries = 0
   while exit_event is None or not exit_event.is_set():
+    ws = None
     try:
       if conn_start is None:
         conn_start = time.monotonic()
@@ -259,8 +256,6 @@ def main(exit_event: threading.Event | None = None):
       methods.cur_upload_items.clear()
 
       methods.handle_long_poll(ws, exit_event)
-
-      ws.close()
     except (KeyboardInterrupt, SystemExit):
       break
     except (ConnectionError, TimeoutError, WebSocketException):
@@ -272,6 +267,9 @@ def main(exit_event: threading.Event | None = None):
 
       conn_retries += 1
       params.remove("LastAthenaPingTime")
+    finally:
+      if ws is not None:
+        ws.close()
 
     time.sleep(backoff(conn_retries))
 

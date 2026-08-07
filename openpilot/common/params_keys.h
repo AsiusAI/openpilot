@@ -143,6 +143,5 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"Version", {PERSISTENT, STRING}},
 
     // Asius
-    {"APIHost", {PERSISTENT, STRING, "https://api.asius.ai"}},
     {"AthenaHost", {PERSISTENT, STRING, "wss://athena.asius.ai"}},
 };

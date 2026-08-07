@@ -1,6 +1,10 @@
 #include <cmath>
 
 #include "system/camerad/sensors/sensor.h"
+#ifndef __VENUS_ENCODER__
+#include <media/msm_camsensor_sdk.h>
+#endif
+
 namespace {
 
 const float sensor_analog_gains_OS04C10[] = {

@@ -18,7 +18,6 @@ CAMERA_CONFIGS = [
 Import('env', 'arch', 'V1')
 chunker_file = File("#openpilot/common/file_chunker.py")
 lenv = env.Clone()
-v1_compile_env = f"LD_LIBRARY_PATH={os.environ['LD_LIBRARY_PATH']} " if V1 else ""
 v1_gpu_lock = File("models/.v1_gpu_compile.lock").abspath
 
 def serialize_v1_gpu(node):
@@ -38,7 +37,7 @@ def estimate_pickle_max_size(onnx_size):
 if V1:
   tg_backend = 'CL'
   tg_flags = ' '.join([
-    f'{v1_compile_env}DEV=CL', 'FLOAT16=1', 'NOLOCALS=1', 'JIT_BATCH_SIZE=0', 'OPENPILOT_HACKS=1',
+    'DEV=CL', 'FLOAT16=1', 'NOLOCALS=1', 'JIT_BATCH_SIZE=0', 'OPENPILOT_HACKS=1',
   ])
 elif arch == 'comma_arm64':
   tg_backend = 'QCOM'
