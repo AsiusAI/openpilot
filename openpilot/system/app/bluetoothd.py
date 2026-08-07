@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import signal
+import struct
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 from dbus_fast import BusType, DBusError, Message, MessageType, PropertyAccess, Variant
@@ -15,32 +18,17 @@ from dbus_fast.service import ServiceInterface, dbus_method, dbus_property
 
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
+import openpilot.cereal.messaging as messaging
 from openpilot.system.app import methods
-from openpilot.system.app.ble_pairing import authorize_ble_peer
-from openpilot.system.app.ble_protocol import (
-  BLE_RX_UUID,
-  BLE_SERVICE_UUID,
-  BLE_TX_UUID,
-  INITIAL_FRAME_BYTES,
-  MAX_FRAME_BYTES,
-  FrameAssembler,
-  FrameError,
-  encode_frames,
-)
+from openpilot.system.app.identity import is_dongle_id
 from openpilot.system.app.terminal import TerminalManager
 from openpilot.system.app.websocketd import (
+  authorize_peer,
   load_authorized_peers,
   pack_peer_message,
-  pairing_mode_active,
   peer_message_timestamp,
   unpack_peer_message,
 )
-
-try:
-  import openpilot.cereal.messaging as messaging
-except ModuleNotFoundError:
-  import cereal.messaging as messaging
-
 
 BLUEZ_SERVICE = "org.bluez"
 DBUS_PROPERTIES = "org.freedesktop.DBus.Properties"
@@ -63,18 +51,128 @@ ADVERTISEMENT_PATH = "/ai/asius/advertisement0"
 AGENT_PATH = "/ai/asius/agent0"
 
 ACTIVE_PEER_SECONDS = 45.
+PAIRING_MODE_SECONDS = 300
 LIVE_STATE_INTERVAL_SECONDS = 1.
 TERMINAL_OUTPUT_QUEUE_SIZE = 64
 NOTIFICATION_FRAME_DELAY_SECONDS = 0.004
 REGISTER_RETRY_SECONDS = 3.
 DEVICE_TYPE = "asius-v1"
 DEVICE_NAME = "Asius v1"
+APP_PAIRING_UNTIL_PARAM = "AppPairingUntil"
+
+BLE_SERVICE_UUID = "84a48ccf-5c26-56f7-91b8-5c39abd40cb9"
+BLE_RX_UUID = "756e901e-4d8e-53ca-a196-41927498a27d"
+BLE_TX_UUID = "6871393b-21dc-5830-b5b1-0debe5fd29c8"
+PROTOCOL_VERSION = 1
+FRAME_START = 1
+FRAME_END = 2
+FRAME_HEADER = struct.Struct(">BBHH")
+INITIAL_FRAME_BYTES = 20
+MAX_FRAME_BYTES = 180
+MAX_MESSAGE_BYTES = 256 * 1024
+ASSEMBLY_TIMEOUT_SECONDS = 10.
 
 DBusStrList = Annotated[list[str], DBusSignature("as")]
 
 
+class FrameError(ValueError):
+  pass
+
+
+def encode_frames(payload: bytes, frame_bytes: int = MAX_FRAME_BYTES, message_id: int | None = None) -> list[bytes]:
+  if frame_bytes <= FRAME_HEADER.size:
+    raise ValueError("frame size is too small")
+  if len(payload) > MAX_MESSAGE_BYTES:
+    raise ValueError("message is too large")
+
+  message_id = secrets.randbelow(2**16) if message_id is None else message_id
+  if not 0 <= message_id < 2**16:
+    raise ValueError("message ID is out of range")
+
+  chunk_bytes = frame_bytes - FRAME_HEADER.size
+  chunks = [payload[offset:offset + chunk_bytes] for offset in range(0, len(payload), chunk_bytes)] or [b""]
+  if len(chunks) >= 2**16:
+    raise ValueError("message requires too many frames")
+
+  frames = []
+  for sequence, chunk in enumerate(chunks):
+    flags = (FRAME_START if sequence == 0 else 0) | (FRAME_END if sequence == len(chunks) - 1 else 0)
+    frames.append(FRAME_HEADER.pack(PROTOCOL_VERSION, flags, message_id, sequence) + chunk)
+  return frames
+
+
+@dataclass
+class PartialMessage:
+  message_id: int
+  next_sequence: int
+  payload: bytearray
+  updated_at: float
+
+
+class FrameAssembler:
+  def __init__(self, max_message_bytes: int = MAX_MESSAGE_BYTES, timeout_seconds: float = ASSEMBLY_TIMEOUT_SECONDS):
+    self.max_message_bytes = max_message_bytes
+    self.timeout_seconds = timeout_seconds
+    self.partial: dict[str, PartialMessage] = {}
+
+  def feed(self, peer: str, frame: bytes, now: float | None = None) -> bytes | None:
+    now = time.monotonic() if now is None else now
+    self.partial = {key: value for key, value in self.partial.items() if now - value.updated_at <= self.timeout_seconds}
+
+    if len(frame) < FRAME_HEADER.size:
+      raise FrameError("frame is shorter than its header")
+
+    version, flags, message_id, sequence = FRAME_HEADER.unpack_from(frame)
+    if version != PROTOCOL_VERSION:
+      raise FrameError("unsupported frame version")
+    if flags & ~(FRAME_START | FRAME_END):
+      raise FrameError("unsupported frame flags")
+
+    if flags & FRAME_START:
+      if sequence != 0:
+        raise FrameError("first frame sequence must be zero")
+      partial = self.partial[peer] = PartialMessage(message_id, 0, bytearray(), now)
+    elif (partial := self.partial.get(peer)) is None:
+      raise FrameError("continuation frame has no start")
+
+    if partial.message_id != message_id:
+      self.partial.pop(peer, None)
+      raise FrameError("message ID changed during assembly")
+    if partial.next_sequence != sequence:
+      self.partial.pop(peer, None)
+      raise FrameError("frame sequence is not contiguous")
+
+    partial.payload.extend(frame[FRAME_HEADER.size:])
+    partial.next_sequence += 1
+    partial.updated_at = now
+    if len(partial.payload) > self.max_message_bytes:
+      self.partial.pop(peer, None)
+      raise FrameError("message is too large")
+
+    if not flags & FRAME_END:
+      return None
+
+    self.partial.pop(peer, None)
+    return bytes(partial.payload)
+
+
 def variant_value(value: Any) -> Any:
   return value.value if isinstance(value, Variant) else value
+
+
+def enable_pairing_mode(duration_seconds: int = PAIRING_MODE_SECONDS) -> int:
+  pairing_until = int(time.time()) + duration_seconds  # noqa: TID251
+  Params().put(APP_PAIRING_UNTIL_PARAM, pairing_until, block=True)
+  return pairing_until
+
+
+def disable_pairing_mode() -> None:
+  Params().remove(APP_PAIRING_UNTIL_PARAM)
+
+
+def pairing_mode_active() -> bool:
+  pairing_until = Params().get(APP_PAIRING_UNTIL_PARAM)
+  return isinstance(pairing_until, int) and pairing_until >= int(time.time())  # noqa: TID251
 
 
 class GattService(ServiceInterface):
@@ -228,7 +326,7 @@ class BlePeerEngine:
     self.tx = tx
     self.tx.on_stop = self.clear_active_peers
     self.assembler = FrameAssembler()
-    self.incoming: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
+    self.incoming: asyncio.Queue[bytes] = asyncio.Queue()
     self.active_peers: dict[str, float] = {}
     self.peer_clocks: dict[str, tuple[int, float]] = {}
     self.params = Params()
@@ -254,7 +352,7 @@ class BlePeerEngine:
     try:
       payload = self.assembler.feed(device, frame)
       if payload is not None:
-        self.incoming.put_nowait((device, payload))
+        self.incoming.put_nowait(payload)
     except FrameError as error:
       cloudlog.event("asius.bluetooth.invalid_frame", device=device, error=str(error))
 
@@ -304,7 +402,7 @@ class BlePeerEngine:
     except Exception:
       pass
 
-  async def handle_hello(self, message: dict[str, Any]) -> None:
+  async def handle_hello(self) -> None:
     response = {
       "type": "hello",
       "v": 1,
@@ -323,7 +421,17 @@ class BlePeerEngine:
       raise ValueError("pair request ID is missing")
     label = body.get("label") if isinstance(body.get("label"), str) else None
 
-    peer = authorize_ble_peer(sender, request_id, label)
+    if not pairing_mode_active():
+      raise PermissionError("pairing mode is not active")
+    if not is_dongle_id(sender):
+      raise ValueError("invalid app public key")
+    if not request_id or len(request_id) > 64:
+      raise ValueError("invalid pairing request ID")
+    if label is not None and len(label) > 80:
+      raise ValueError("pairing label is too long")
+
+    authorize_peer(sender, label)
+    disable_pairing_mode()
     self.active_peers[sender] = time.monotonic()
     await self.send_body(sender, {
       "type": "pair-response",
@@ -332,11 +440,8 @@ class BlePeerEngine:
     })
     cloudlog.event("asius.bluetooth.paired", sender=sender, request_id=request_id)
 
-  async def handle_call(self, sender: str, body: dict[str, Any]) -> None:
-    if hasattr(athenad, "handle"):
-      response = await asyncio.to_thread(lambda: json.loads(methods.handle(body, methods.dispatcher)))
-    else:
-      response = await asyncio.to_thread(lambda: json.loads(methods.JSONRPCResponseManager.handle(json.dumps(body), methods.dispatcher).json))
+  async def handle_rpc(self, sender: str, body: dict[str, Any]) -> None:
+    response = await asyncio.to_thread(lambda: json.loads(methods.handle(body, methods.dispatcher)))
     await self.send_body(sender, response)
 
   async def handle_encrypted(self, payload: bytes) -> None:
@@ -371,15 +476,8 @@ class BlePeerEngine:
       await self.send_body(sender, {"type": "ble-session", "ready": True})
     elif message_type == "ble-ping":
       await self.send_body(sender, {"type": "ble-pong", "id": body.get("id")})
-    elif message_type == "athena-call" or body.get("method"):
-      await self.handle_call(sender, body)
-    elif message_type == "athena-response":
-      methods.log_recv_queue.put_nowait(json.dumps({
-        "jsonrpc": "2.0",
-        "id": body.get("id"),
-        "result": body.get("result"),
-        "error": body.get("error"),
-      }))
+    elif body.get("method"):
+      await self.handle_rpc(sender, body)
     elif message_type == "event":
       if body.get("name") == "terminal":
         self.terminal_manager.handle(sender, body.get("payload"))
@@ -400,10 +498,10 @@ class BlePeerEngine:
     while not stop.is_set():
       payload = b""
       try:
-        _, payload = await asyncio.wait_for(self.incoming.get(), timeout=0.5)
+        payload = await asyncio.wait_for(self.incoming.get(), timeout=0.5)
         message = json.loads(payload)
         if isinstance(message, dict) and message.get("type") == "hello":
-          await self.handle_hello(message)
+          await self.handle_hello()
         else:
           await self.handle_encrypted(payload)
       except TimeoutError:

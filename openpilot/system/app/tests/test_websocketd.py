@@ -27,6 +27,20 @@ def private_key(identity: str) -> ed25519.Ed25519PrivateKey:
   return ed25519.Ed25519PrivateKey.from_private_bytes(identity_to_bytes(identity))
 
 
+def memory_params(monkeypatch):
+  values = {}
+
+  class MemoryParams:
+    def get(self, key):
+      return values.get(key)
+
+    def put(self, key, value, block=False):
+      values[key] = value
+
+  monkeypatch.setattr(websocketd, "Params", MemoryParams)
+  return values
+
+
 def test_ed25519_base58_keys_are_fixed_width():
   key = bytes_to_identity(b"\x00" * 31 + b"\x01")
 
@@ -35,8 +49,7 @@ def test_ed25519_base58_keys_are_fixed_width():
   assert not is_dongle_id(key[1:])
 
 
-def test_authorized_peer_metadata(tmp_path, monkeypatch):
-  monkeypatch.setattr(websocketd, "PARAMS_DIR", tmp_path)
+def test_authorized_peer_metadata(memory_params, monkeypatch):
   monkeypatch.setattr(websocketd, "wall_time", lambda: 1_234)
 
   peer = websocketd.authorize_peer(APP_KEY, label="Karel phone")
@@ -56,29 +69,23 @@ def test_payload_timestamp_valid_rejects_old_messages(monkeypatch):
   assert not websocketd.payload_timestamp_valid("1000")
 
 
-def test_pairing_mode_window(tmp_path, monkeypatch):
-  monkeypatch.setattr(websocketd, "PARAMS_DIR", tmp_path)
-  now = 1_000
-  monkeypatch.setattr(websocketd, "wall_time", lambda: now)
-
-  assert not websocketd.pairing_mode_active()
-  assert websocketd.enable_pairing_mode() == 1_300
-  assert websocketd.pairing_mode_active()
-
-  now = 1_181
-  assert not websocketd.pairing_mode_active()
-
-
-def test_pairing_url_uses_pair_route(tmp_path, monkeypatch):
-  monkeypatch.setattr(websocketd, "PARAMS_DIR", tmp_path)
+def test_pairing_url_uses_pair_route(monkeypatch):
   monkeypatch.setattr(websocketd, "pairing_token", lambda recipient: f"token-for-{recipient}")
 
   assert websocketd.pairing_url(APP_KEY) == f"https://app.asius.ai/pair#token=token-for-{APP_KEY}"
-  assert websocketd.pairing_mode_active()
+
+
+def test_pairing_token_is_verified_by_its_device_identity(monkeypatch):
+  monkeypatch.setattr(websocketd, "get_device_private_key", lambda: private_key(SENDER_PRIVATE_KEY))
+
+  token = websocketd.pairing_token(SENDER_PUBLIC_KEY)
+
+  assert websocketd.verify_pair_token(token, SENDER_PUBLIC_KEY)
+  assert not websocketd.verify_pair_token(token, RECIPIENT_PUBLIC_KEY)
 
 
 def test_encrypt_payload_matches_web_v4_fixture(monkeypatch):
-  monkeypatch.setattr(websocketd, "identity_private_key", lambda: private_key(SENDER_PRIVATE_KEY))
+  monkeypatch.setattr(websocketd, "get_device_private_key", lambda: private_key(SENDER_PRIVATE_KEY))
   monkeypatch.setattr(websocketd, "wall_time", lambda: 1_700_000_000)
   monkeypatch.setattr(websocketd.os, "urandom", lambda n: bytes(range(n)))
 
@@ -88,7 +95,7 @@ def test_encrypt_payload_matches_web_v4_fixture(monkeypatch):
 
 
 def test_decrypt_payload_matches_web_v4_fixture(monkeypatch):
-  monkeypatch.setattr(websocketd, "identity_private_key", lambda: private_key(RECIPIENT_PRIVATE_KEY))
+  monkeypatch.setattr(websocketd, "get_device_private_key", lambda: private_key(RECIPIENT_PRIVATE_KEY))
   monkeypatch.setattr(websocketd, "wall_time", lambda: 1_700_000_000)
 
   payload = json.dumps(V4_PAYLOAD_FIXTURE)
