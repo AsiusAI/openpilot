@@ -147,7 +147,7 @@ def pairing_token(recipient: str, expiry_seconds: int = PAIRING_MODE_SECONDS) ->
 
 def pairing_url(recipient: str) -> str:
   enable_pairing_mode()
-  return f"https://app.asius.ai/#pair={pairing_token(recipient)}"
+  return f"https://app.asius.ai/pair#token={pairing_token(recipient)}"
 
 
 def verify_identity_signature(public_key: str, signature: str, data: bytes) -> bool:

@@ -69,6 +69,14 @@ def test_pairing_mode_window(tmp_path, monkeypatch):
   assert not websocketd.pairing_mode_active()
 
 
+def test_pairing_url_uses_pair_route(tmp_path, monkeypatch):
+  monkeypatch.setattr(websocketd, "PARAMS_DIR", tmp_path)
+  monkeypatch.setattr(websocketd, "pairing_token", lambda recipient: f"token-for-{recipient}")
+
+  assert websocketd.pairing_url(APP_KEY) == f"https://app.asius.ai/pair#token=token-for-{APP_KEY}"
+  assert websocketd.pairing_mode_active()
+
+
 def test_encrypt_payload_matches_web_v4_fixture(monkeypatch):
   monkeypatch.setattr(websocketd, "identity_private_key", lambda: private_key(SENDER_PRIVATE_KEY))
   monkeypatch.setattr(websocketd, "wall_time", lambda: 1_700_000_000)
