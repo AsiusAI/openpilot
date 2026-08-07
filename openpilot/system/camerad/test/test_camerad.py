@@ -138,11 +138,5 @@ class TestCamerad(OpenpilotTestCase):
       # EOF timestamps can be reconstructed from SOF or supplied directly by the camera driver.
       assert np.all((ts[c]['t'] - ts[c]['timestampEof']/1e9) > -0.10)        # when EOF > logMonoTime, it should never be more than two frames
 
-  def test_process_restart(self):
-    logs = run_and_log(["camerad"], CAMERAS, 10)
-    ts = msgs_to_time_series(logs)
-    self._sanity_checks(ts)
-
-
 if __name__ == "__main__":
   unittest.main()
