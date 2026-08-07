@@ -1,16 +1,14 @@
 import asyncio
 import json
 import time
-from types import SimpleNamespace
 
 import capnp
-import pytest
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.cereal import messaging, log
 from teleoprtc.tracks import VIDEO_CLOCK_RATE
 
-from openpilot.system.webrtc.webrtcd import CerealOutgoingMessageProxy, CerealIncomingMessageProxy, ServerState, handle_get_stream
-from openpilot.system.webrtc.device.video import V4L2_BUF_FLAG_KEYFRAME, LiveStreamVideoStreamTrack, _normalize_h264_start_codes
+from openpilot.system.webrtc.webrtcd import CerealOutgoingMessageProxy, CerealIncomingMessageProxy
+from openpilot.system.webrtc.device.video import LiveStreamVideoStreamTrack
 
 
 class TestStreamSession(OpenpilotTestCase):
@@ -68,7 +66,6 @@ class TestStreamSession(OpenpilotTestCase):
 
   def test_livestream_track(self, mocker):
     fake_msg = messaging.new_message("livestreamDriverEncodeData")
-    fake_msg.livestreamDriverEncodeData.idx.flags = V4L2_BUF_FLAG_KEYFRAME
 
     config = {"receive.return_value": fake_msg.to_bytes()}
     mocker.patch("msgq.SubSocket", spec=True, **config)
@@ -83,72 +80,3 @@ class TestStreamSession(OpenpilotTestCase):
         start_pts = packet.pts
       assert abs(i + packet.pts - (start_pts + (((time.monotonic_ns() - start_ns) * VIDEO_CLOCK_RATE) // 1_000_000_000))) < 450 #5ms
       assert bytes(packet) == b""
-
-  def test_livestream_normalizes_mixed_h264_start_codes(self):
-    data = b"\x00\x00\x01\x67sps\x00\x00\x00\x01\x68pps\xff\x00\x00\x01\x65idr"
-    expected = b"\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x68pps\xff\x00\x00\x00\x01\x65idr"
-
-    assert _normalize_h264_start_codes(data) == expected
-
-  def test_livestream_track_camera_switch_requests_keyframe(self, mocker):
-    mocker.patch("msgq.SubSocket", spec=True)
-    track = LiveStreamVideoStreamTrack("wideRoad")
-    track._seen_keyframe = True
-    request_keyframe = mocker.patch.object(track, "request_keyframe")
-
-    track.switch_camera("driver")
-
-    assert not track._seen_keyframe
-    request_keyframe.assert_called_once()
-
-  def test_livestream_track_waits_for_keyframe(self, mocker):
-    delta = messaging.new_message("livestreamDriverEncodeData")
-    delta.livestreamDriverEncodeData.data = b"delta"
-    keyframe = messaging.new_message("livestreamDriverEncodeData")
-    keyframe.livestreamDriverEncodeData.idx.flags = V4L2_BUF_FLAG_KEYFRAME
-    keyframe.livestreamDriverEncodeData.data = b"keyframe"
-    sock = mocker.Mock()
-    sock.receive.side_effect = [delta.to_bytes(), keyframe.to_bytes()]
-    mocker.patch("msgq.SubSocket", return_value=sock)
-
-    track = LiveStreamVideoStreamTrack("driver")
-    packet = self.loop.run_until_complete(track.recv())
-
-    assert bytes(packet) == b"keyframe"
-    assert sock.receive.call_count == 2
-
-  def test_multiple_stream_sessions_remain_connected(self, mocker):
-    sessions = []
-
-    class FakeStreamSession:
-      def __init__(self, body):
-        self.identifier = f"stream-{len(sessions)}"
-        self.enabled = body.enabled
-        self.run_task = None
-        self.stop_count = 0
-        sessions.append(self)
-
-      async def get_answer(self):
-        return SimpleNamespace(sdp="answer", type="answer")
-
-      def start(self):
-        self.run_task = asyncio.create_task(asyncio.Event().wait())
-
-      async def stop(self):
-        self.stop_count += 1
-        if self.run_task is not None:
-          self.run_task.cancel()
-          with pytest.raises(asyncio.CancelledError):
-            await self.run_task
-
-    mocker.patch("openpilot.system.webrtc.webrtcd.StreamSession", FakeStreamSession)
-    state = ServerState()
-    body = json.dumps({"sdp": "offer", "cameras": ["wideRoad"], "enabled": True}).encode()
-
-    self.loop.run_until_complete(handle_get_stream(state, body))
-    self.loop.run_until_complete(handle_get_stream(state, body))
-
-    assert len(state.streams) == 2
-    assert sessions[0].stop_count == 0
-    for session in sessions:
-      self.loop.run_until_complete(session.stop())

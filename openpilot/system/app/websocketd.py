@@ -15,11 +15,11 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, load_pem_private_key
 from websocket import WebSocketException, create_connection
 
-from openpilot.common.api import Api
+from openpilot.system.app.api import Api
 from openpilot.common.params import Params
 from openpilot.common.realtime import set_core_affinity
 from openpilot.common.swaglog import cloudlog
-from openpilot.system.athena.identity import identity_to_bytes, is_dongle_id
+from openpilot.system.app.identity import identity_to_bytes, is_dongle_id
 
 
 ATHENA_AUTHORIZED_KEYS_PARAM = "AthenadAuthorizedKeys"
@@ -128,7 +128,7 @@ def stable_json(value) -> str:
 
 
 def identity_private_key() -> ed25519.Ed25519PrivateKey:
-  from openpilot.common.api import get_key_pair
+  from openpilot.system.app.api import get_key_pair
   _, private_key, _ = get_key_pair()
   key = load_pem_private_key(private_key.encode(), password=None)
   if not isinstance(key, ed25519.Ed25519PrivateKey):

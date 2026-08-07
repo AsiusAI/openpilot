@@ -28,7 +28,7 @@ from websocket import ABNF, WebSocket, WebSocketTimeoutException
 import openpilot.cereal.messaging as messaging
 from openpilot.cereal import log
 from openpilot.cereal.services import SERVICE_LIST
-from openpilot.common.api import get_key_pair
+from openpilot.system.app.api import get_key_pair
 from openpilot.common.utils import CallbackReader, get_upload_stream
 from openpilot.common.params import Params
 from openpilot.common.hardware import HARDWARE

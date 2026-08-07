@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import math
-import os
 from numbers import Number
 
 from openpilot.cereal import log
@@ -201,7 +200,8 @@ class Controls:
     cs.upAccelCmd = float(self.LoC.pid.p)
     cs.uiAccelCmd = float(self.LoC.pid.i)
     cs.ufAccelCmd = float(self.LoC.pid.f)
-    cs.forceDecel = bool(self.sm['driverMonitoringState'].noResponseForceDecel or self.sm['selfdriveState'].state == State.softDisabling)
+    cs.forceDecel = bool(self.sm['driverMonitoringState'].noResponseForceDecel or
+                         (self.sm['selfdriveState'].state == State.softDisabling))
 
     # trigger the car's stock driver monitoring escalation
     CC.driverMonitoringEscalation = cs.forceDecel
