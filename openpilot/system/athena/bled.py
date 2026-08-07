@@ -329,7 +329,6 @@ class BlePeerEngine:
       "type": "pair-response",
       "publicKey": self.dongle_id,
       "device-type": DEVICE_TYPE,
-      "aclEpoch": peer["aclEpoch"],
     })
     cloudlog.event("asius.bluetooth.paired", sender=sender, request_id=request_id)
 
@@ -367,7 +366,6 @@ class BlePeerEngine:
         "type": "pair-response",
         "publicKey": self.dongle_id,
         "device-type": DEVICE_TYPE,
-        "aclEpoch": int(load_authorized_peers()[sender].get("aclEpoch", 0)),
       })
     elif message_type == "ble-session":
       await self.send_body(sender, {"type": "ble-session", "ready": True})

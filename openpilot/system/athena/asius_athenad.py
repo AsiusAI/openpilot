@@ -39,8 +39,6 @@ from openpilot.system.athena.rpc import Dispatcher, handle
 from openpilot.system.athena.terminal import TerminalManager
 from openpilot.system.athena.websocketd import (
   authorize_peer,
-  bump_acl_epoch,
-  get_acl_epoch,
   load_authorized_peers,
   pack_peer_message,
   pairing_mode_active,
@@ -76,7 +74,6 @@ SAVE_PARAMS_BLOCKED_KEYS = {
   "AccessToken",
   "ApiCache_Device",
   "AthenadAuthorizedKeys",
-  "AthenadAuthorizedKeysEpoch",
   "AthenadPairingUntil",
   "AthenadUploadQueue",
   "DoUninstall",
@@ -90,6 +87,7 @@ SAVE_PARAMS_BLOCKED_KEYS = {
 }
 LIVE_STATE_SERVICES = [
   "deviceState",
+  "peripheralState",
   "liveCalibration",
   "managerState",
   "onroadEvents",
@@ -582,11 +580,9 @@ def getPublicKey() -> str | None:
 @dispatcher.add_method
 def getAuthorizedPeers() -> dict[str, Any]:
   return {
-    "aclEpoch": get_acl_epoch(),
     "peers": [
       {
         "publicKey": public_key,
-        "aclEpoch": peer.get("aclEpoch"),
         "label": peer.get("label"),
         "createdAt": peer.get("createdAt"),
       }
@@ -601,9 +597,8 @@ def removeAuthorizedPeer(publicKey: str) -> dict[str, Any]:
   removed = peers.pop(publicKey, None) is not None
   if removed:
     save_authorized_peers(peers)
-    bump_acl_epoch()
 
-  return {"removed": removed, "aclEpoch": get_acl_epoch()}
+  return {"removed": removed}
 
 
 @dispatcher.add_method
