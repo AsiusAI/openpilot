@@ -1,8 +1,6 @@
 #include <cmath>
 
 #include "system/camerad/sensors/sensor.h"
-#include <media/msm_camsensor_sdk.h>
-
 namespace {
 
 const float sensor_analog_gains_OS04C10[] = {

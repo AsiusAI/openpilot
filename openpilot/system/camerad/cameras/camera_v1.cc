@@ -22,22 +22,17 @@
 
 #include "common/params.h"
 #include "common/swaglog.h"
-#include "common/timing.h"
 #include "system/camerad/cameras/hw.h"
-#include "system/camerad/cameras/ife_v1.h"
 #include "system/camerad/cameras/nv12_info.h"
 #include "system/camerad/sensors/sensor.h"
 
 
 ExitHandler do_exit;
 
-const bool env_debug_frames = getenv("DEBUG_FRAMES") != nullptr;
-
 struct OneCamRoute {
   int csiphy;
   int csid;
-  int rdi_vfe;
-  int preferred_pix_vfe;
+  int vfe;
   const char *sensor;
 };
 
@@ -50,16 +45,12 @@ struct OneCamRoute {
 struct V1CamConfig {
   uint32_t csiphy_entity;
   uint32_t csid_entity;
-  uint32_t vfe_rdi_entity;
   uint32_t vfe_pix_entity;
-  int rdi_video_dev;
   int pix_video_dev;
   const char *sensor_name;
   int csiphy_subdev;
   int csid_subdev;
-  int vfe_rdi_subdev;
   int vfe_pix_subdev;
-  int pix_vfe;
 };
 
 static int find_v4l_dev(const char *prefix, const char *name) {
@@ -82,39 +73,25 @@ static uint32_t find_media_entity(int media_fd, const char *name) {
 
 static V1CamConfig resolve_cam_config(int media_fd, int cam_idx) {
   static const OneCamRoute routing[] = {
-    {3, 1, 1, 1, "os04c10 20-0036"},
-    {2, 0, 0, 0, "os04c10 18-0036"},
-    {0, 2, 2, 2, "os04c10 16-0036"},
+    {3, 1, 1, "os04c10 20-0036"},
+    {2, 0, 0, "os04c10 18-0036"},
+    {0, 2, 2, "os04c10 16-0036"},
   };
   const auto *r = &routing[cam_idx];
   V1CamConfig cfg = {};
-  cfg.rdi_video_dev = -1;
   cfg.pix_video_dev = -1;
   cfg.csiphy_subdev = -1;
   cfg.csid_subdev = -1;
-  cfg.vfe_rdi_subdev = -1;
   cfg.vfe_pix_subdev = -1;
-  cfg.pix_vfe = -1;
   cfg.sensor_name = r->sensor;
   cfg.csiphy_entity = find_media_entity(media_fd, util::string_format("msm_csiphy%d", r->csiphy).c_str());
   cfg.csid_entity = find_media_entity(media_fd, util::string_format("msm_csid%d", r->csid).c_str());
-  cfg.vfe_rdi_entity = find_media_entity(media_fd, util::string_format("msm_vfe%d_rdi0", r->rdi_vfe).c_str());
-  cfg.rdi_video_dev = find_v4l_dev("video", util::string_format("msm_vfe%d_video0", r->rdi_vfe).c_str());
-
-  int pix_vfe = r->preferred_pix_vfe;
-  auto resolve_pix = [&](int vfe) {
-    if (vfe < 0) return false;
-    cfg.vfe_pix_entity = find_media_entity(media_fd, util::string_format("msm_vfe%d_pix", vfe).c_str());
-    cfg.pix_video_dev = find_v4l_dev("video", util::string_format("msm_vfe%d_video3", vfe).c_str());
-    cfg.vfe_pix_subdev = find_v4l_dev("v4l-subdev", util::string_format("msm_vfe%d_pix", vfe).c_str());
-    cfg.pix_vfe = vfe;
-    return cfg.vfe_pix_entity != 0 && cfg.pix_video_dev >= 0 && cfg.vfe_pix_subdev >= 0;
-  };
-  if (!resolve_pix(pix_vfe) && pix_vfe != r->rdi_vfe) resolve_pix(r->rdi_vfe);
+  cfg.vfe_pix_entity = find_media_entity(media_fd, util::string_format("msm_vfe%d_pix", r->vfe).c_str());
+  cfg.pix_video_dev = find_v4l_dev("video", util::string_format("msm_vfe%d_video3", r->vfe).c_str());
+  cfg.vfe_pix_subdev = find_v4l_dev("v4l-subdev", util::string_format("msm_vfe%d_pix", r->vfe).c_str());
 
   cfg.csiphy_subdev = find_v4l_dev("v4l-subdev", util::string_format("msm_csiphy%d", r->csiphy).c_str());
   cfg.csid_subdev = find_v4l_dev("v4l-subdev", util::string_format("msm_csid%d", r->csid).c_str());
-  cfg.vfe_rdi_subdev = find_v4l_dev("v4l-subdev", util::string_format("msm_vfe%d_rdi0", r->rdi_vfe).c_str());
   return cfg;
 }
 
@@ -154,35 +131,10 @@ struct VfeDmiCmd {
   uint64_t data;
 };
 
-struct VfeMapBufCmd {
-  int32_t fd;
-  uint32_t pad;
-  uint64_t iova;
-  uint64_t size;
-};
-
-struct VfeUnmapBufCmd {
-  uint64_t iova;
-};
-
-struct VfeSetBufCmd {
-  uint32_t wm_index;
-  uint32_t stride;
-  uint64_t iova;
-  uint32_t frame_inc;
-  uint32_t pad;
-};
-
 #define VFE_IOC_MAGIC '#'
 #define VFE_WRITE_REGS _IOW(VFE_IOC_MAGIC, 1, struct VfeWriteRegsCmd)
 #define VFE_WRITE_DMI _IOW(VFE_IOC_MAGIC, 2, struct VfeDmiCmd)
-#define VFE_MAP_BUF _IOWR(VFE_IOC_MAGIC, 3, struct VfeMapBufCmd)
-#define VFE_UNMAP_BUF _IOW(VFE_IOC_MAGIC, 4, struct VfeUnmapBufCmd)
-#define VFE_SET_BUF _IOW(VFE_IOC_MAGIC, 5, struct VfeSetBufCmd)
 #define VFE_REG_UPDATE _IO(VFE_IOC_MAGIC, 6)
-#define VFE_START _IO(VFE_IOC_MAGIC, 7)
-#define VFE_STOP _IO(VFE_IOC_MAGIC, 8)
-#define VFE_WAIT_SOF _IO(VFE_IOC_MAGIC, 9)
 
 static int v1_ioctl(int fd, unsigned long request, void *arg = nullptr) {
   int ret;
@@ -191,18 +143,6 @@ static int v1_ioctl(int fd, unsigned long request, void *arg = nullptr) {
     ret = ioctl(fd, request, arg);
   } while (ret == -1 && errno == EINTR && try_cnt++ < 100);
   return ret;
-}
-
-static std::unique_ptr<SensorInfo> make_one_sensor() {
-  return std::make_unique<OS04C10>();
-}
-
-static uint32_t v1_media_bus_code() {
-  return MEDIA_BUS_FMT_SBGGR10_1X10;
-}
-
-static bool v1_has_dma_heap() {
-  return access("/dev/dma_heap/system", R_OK | W_OK) == 0;
 }
 
 // The mainline CAMSS graph links VFE_LINE_PIX from CSID source pad 4.
@@ -699,10 +639,6 @@ static bool apply_os04_20fps_timing(int sensor_fd, int cam_idx) {
   }, "20fps timing", cam_idx);
 }
 
-static int v1_output_scale(const SensorInfo &sensor) {
-  return std::max(sensor.out_scale, 1);
-}
-
 static int v1_physical_cam_num(int camera_num) {
   // openpilot camera_num 0/1/2 maps to physical CAM3/CAM2/CAM1.
   static const int physical[] = {3, 2, 1};
@@ -732,42 +668,28 @@ class OneCamera {
 public:
   CameraConfig cc;
   std::unique_ptr<SensorInfo> sensor;
-  CameraBuf buf;
   bool enabled;
 
   int video_fd = -1;
   int sensor_fd = -1;
-  bool use_pix = false;
-  bool use_pix_v4l2 = false;
-  bool use_v4l2_dmabuf = false;
   bool streaming = false;
 
   int n_bufs = 4;
-  uint64_t pix_iovas[VIPC_BUFFER_COUNT] = {};
-  uint64_t pix_map_sizes[VIPC_BUFFER_COUNT] = {};
-  int pix_current_idx = 0;
-  int pix_next_idx = 1;
 
   uint32_t output_width = 0, output_height = 0;
   uint32_t stride = 0, y_height = 0, uv_height = 0, yuv_size = 0, uv_offset = 0;
 
-  OneCamera(const CameraConfig &config) : cc(config), enabled(config.enabled) {}
+  OneCamera(const CameraConfig &config) : cc(config), enabled(true) {}
 
   void camera_open(VisionIpcServer *v);
   void camera_close();
   void setup_media_links();
   void set_formats();
-  bool map_pix_buffers();
-  bool configure_pix_isp();
   bool write_vfe_regs(const std::vector<VfeRegWrite> &regs, const char *name);
   bool apply_vfe_tuning();
   bool apply_vfe_gamma();
-  bool set_pix_buffer(int index);
-  bool use_custom_pix_ioctl() const { return use_pix && !use_pix_v4l2; }
-  bool use_direct_vipc_buffers() const { return use_custom_pix_ioctl() || use_v4l2_dmabuf; }
   void queue_all_buffers();
   void stream_on();
-  void start_streaming();
   void stop_streaming();
   int dequeue_frame(uint64_t *timestamp);
   void queue_frame(int index);
@@ -862,7 +784,7 @@ void OneCamera::setup_media_links() {
 void OneCamera::set_formats() {
   int cam_idx = cc.camera_num;
   auto &dcfg = v1_cams[cam_idx];
-  const uint32_t media_bus_code = v1_media_bus_code();
+  constexpr uint32_t media_bus_code = MEDIA_BUS_FMT_SBGGR10_1X10;
   // set format on CSIPHY subdev
   int csiphy_fd = open(util::string_format("/dev/v4l-subdev%d", dcfg.csiphy_subdev).c_str(), O_RDWR);
   if (csiphy_fd >= 0) {
@@ -967,70 +889,8 @@ void OneCamera::set_formats() {
   }
 }
 
-bool OneCamera::map_pix_buffers() {
-  for (int i = 0; i < VIPC_BUFFER_COUNT; i++) {
-    VisionBuf *vb = vipc_server->get_buffer(stream_type, i);
-    if (vb == nullptr || vb->fd < 0) {
-      LOGE("cam %d: missing VIPC buffer idx=%d fd=%d", cc.camera_num, i, vb ? vb->fd : -1);
-      return false;
-    }
-
-    VfeMapBufCmd cmd = {};
-    cmd.fd = vb->fd;
-    if (v1_ioctl(video_fd, VFE_MAP_BUF, &cmd) != 0) {
-      LOGE("cam %d: VFE_MAP_BUF idx=%d fd=%d failed: %d (%s)",
-           cc.camera_num, i, vb->fd, errno, strerror(errno));
-      return false;
-    }
-    if (cmd.iova == 0 || cmd.size < yuv_size) {
-      LOGE("cam %d: VFE_MAP_BUF idx=%d returned invalid iova=0x%llx size=%llu expected>=%u",
-           cc.camera_num, i, (unsigned long long)cmd.iova, (unsigned long long)cmd.size, yuv_size);
-      return false;
-    }
-    pix_iovas[i] = cmd.iova;
-    pix_map_sizes[i] = cmd.size;
-  }
-  LOG("cam %d: mapped %d VIPC buffers into VFE", cc.camera_num, VIPC_BUFFER_COUNT);
-  return true;
-}
-
-bool OneCamera::configure_pix_isp() {
-  auto [regs, dmis] = build_initial_config_flat(cc, sensor.get(), output_width, output_height);
-
-  for (size_t offset = 0; offset < regs.size(); ) {
-    const size_t count = std::min<size_t>(regs.size() - offset, 1024);
-    VfeWriteRegsCmd cmd = {};
-    cmd.regs = (uint64_t)(uintptr_t)(regs.data() + offset);
-    cmd.count = count;
-    if (v1_ioctl(video_fd, VFE_WRITE_REGS, &cmd) != 0) {
-      LOGE("cam %d: VFE_WRITE_REGS offset=%zu count=%zu failed: %d (%s)",
-           cc.camera_num, offset, count, errno, strerror(errno));
-      return false;
-    }
-    offset += count;
-  }
-
-  for (const auto &dmi : dmis) {
-    VfeDmiCmd cmd = {};
-    cmd.dmi_cfg_offset = dmi.cfg_offset;
-    cmd.ram_select = dmi.ram_select;
-    cmd.count = dmi.count;
-    cmd.data = (uint64_t)(uintptr_t)dmi.data;
-    if (v1_ioctl(video_fd, VFE_WRITE_DMI, &cmd) != 0) {
-      LOGE("cam %d: VFE_WRITE_DMI ram=%u count=%u failed: %d (%s)",
-           cc.camera_num, dmi.ram_select, dmi.count, errno, strerror(errno));
-      return false;
-    }
-  }
-
-  LOG("cam %d: programmed VFE ISP (%zu regs, %zu DMI uploads, %ux%u -> %ux%u)",
-      cc.camera_num, regs.size(), dmis.size(), sensor->frame_width, sensor->frame_height,
-      output_width, output_height);
-  return true;
-}
-
 bool OneCamera::write_vfe_regs(const std::vector<VfeRegWrite> &regs, const char *name) {
-  if (!use_pix || video_fd < 0) return true;
+  if (video_fd < 0) return false;
   if (regs.empty()) return true;
 
   for (size_t offset = 0; offset < regs.size(); ) {
@@ -1057,17 +917,10 @@ bool OneCamera::write_vfe_regs(const std::vector<VfeRegWrite> &regs, const char 
 }
 
 bool OneCamera::apply_vfe_tuning() {
-  if (!use_pix || video_fd < 0) return true;
-  if (!sensor || sensor->image_sensor != cereal::FrameData::ImageSensor::OS04C10) return true;
   return write_vfe_regs(default_os04_vfe_tuning_regs(cc.camera_num), "OS04 tuning");
 }
 
 bool OneCamera::apply_vfe_gamma() {
-  if (!use_pix || video_fd < 0 || !sensor ||
-      sensor->image_sensor != cereal::FrameData::ImageSensor::OS04C10) {
-    return true;
-  }
-
   const float k = default_os04_gamma_k(cc.camera_num);
   const float g_k = k;
   const float b_k = k;
@@ -1109,37 +962,6 @@ bool OneCamera::apply_vfe_gamma() {
   return true;
 }
 
-bool OneCamera::set_pix_buffer(int index) {
-  if (index < 0 || index >= VIPC_BUFFER_COUNT || pix_iovas[index] == 0) return false;
-
-  VfeSetBufCmd y = {};
-  y.wm_index = 3;
-  y.stride = stride;
-  y.iova = pix_iovas[index];
-  y.frame_inc = stride * y_height;
-  if (v1_ioctl(video_fd, VFE_SET_BUF, &y) != 0) {
-    LOGE("cam %d: VFE_SET_BUF Y idx=%d failed: %d (%s)", cc.camera_num, index, errno, strerror(errno));
-    return false;
-  }
-
-  VfeSetBufCmd uv = {};
-  uv.wm_index = 4;
-  uv.stride = stride;
-  uv.iova = pix_iovas[index] + uv_offset;
-  uv.frame_inc = stride * uv_height;
-  if (v1_ioctl(video_fd, VFE_SET_BUF, &uv) != 0) {
-    LOGE("cam %d: VFE_SET_BUF UV idx=%d failed: %d (%s)", cc.camera_num, index, errno, strerror(errno));
-    return false;
-  }
-
-  if (v1_ioctl(video_fd, VFE_REG_UPDATE) != 0) {
-    LOGE("cam %d: VFE_REG_UPDATE idx=%d failed: %d (%s)", cc.camera_num, index, errno, strerror(errno));
-    return false;
-  }
-
-  return true;
-}
-
 void OneCamera::camera_open(VisionIpcServer *v) {
   if (!enabled) return;
 
@@ -1148,30 +970,26 @@ void OneCamera::camera_open(VisionIpcServer *v) {
 
   int cam_idx = cc.camera_num;
   auto &dcfg = v1_cams[cam_idx];
-  sensor = make_one_sensor();
-  if (!sensor) {
-    LOGE("cam %d: failed to create sensor config", cam_idx);
-    enabled = false;
-    return;
-  }
+  sensor = std::make_unique<OS04C10>();
   LOG("cam %d: using OS04C10 RAW10 media path", cam_idx);
   sensor->bits_per_pixel = 10;
   sensor->mipi_format = CAM_FORMAT_MIPI_RAW_10;
   sensor->frame_data_type = CSI_RAW10;
   sensor->frame_stride = sensor->frame_width * 10 / 8;
+  sensor->exposure_time_max = 4717;
+  sensor->analog_gain_max_idx = 0x1e;
+  sensor->max_ev = sensor->exposure_time_max * sensor->dc_gain_factor *
+                   sensor->sensor_analog_gains[sensor->analog_gain_max_idx];
 
-  use_pix = dcfg.vfe_pix_entity != 0 &&
-            dcfg.pix_video_dev >= 0 && dcfg.vfe_pix_subdev >= 0;
-  use_pix_v4l2 = use_pix;
-  if (!use_pix) {
-    LOGE("cam %d: VFE PIX unavailable, disabling camera; OS04 CPU debayer is not available on this branch "
-         "(pix_entity=%u pix_dev=%d pix_subdev=%d)",
+  if (dcfg.vfe_pix_entity == 0 || dcfg.pix_video_dev < 0 || dcfg.vfe_pix_subdev < 0) {
+    LOGE("cam %d: required VFE PIX path is unavailable "
+         "(entity=%u video=%d subdev=%d)",
          cam_idx, dcfg.vfe_pix_entity, dcfg.pix_video_dev, dcfg.vfe_pix_subdev);
     enabled = false;
     return;
   }
 
-  const int output_scale = v1_output_scale(*sensor);
+  const int output_scale = sensor->out_scale;
   output_width = std::max(2U, (sensor->frame_width / output_scale) & ~1U);
   output_height = std::max(2U, (sensor->frame_height / output_scale) & ~1U);
   auto [s, yh, uvh, sz] = get_nv12_info(output_width, output_height);
@@ -1190,8 +1008,7 @@ void OneCamera::camera_open(VisionIpcServer *v) {
     enabled = false;
     return;
   }
-  LOG("cam %d: opened %s (%s mode)", cam_idx, path.c_str(),
-      use_pix_v4l2 ? "VFE PIX V4L2" : "VFE PIX ioctl");
+  LOG("cam %d: opened %s (VFE PIX V4L2 DMABUF)", cam_idx, path.c_str());
 
   // find sensor subdev. The Dragon exposes enough CAMSS entities that the
   // third OS04 can land above v4l-subdev31.
@@ -1225,35 +1042,9 @@ void OneCamera::camera_open(VisionIpcServer *v) {
   setup_media_links();
   set_formats();
 
-  use_v4l2_dmabuf = use_pix && use_pix_v4l2 && v1_has_dma_heap();
-  if (use_pix && use_pix_v4l2) {
-    if (!use_v4l2_dmabuf) {
-      LOGE("cam %d: VFE PIX V4L2 requires DMABUF on this branch; refusing V4L2 MMAP CPU-copy path", cam_idx);
-      enabled = false;
-      return;
-    }
-    n_bufs = 4;
-  }
-
-  if (use_custom_pix_ioctl()) {
-    v->create_buffers_with_sizes(stream_type, VIPC_BUFFER_COUNT,
-                                 output_width, output_height,
-                                 yuv_size, stride, uv_offset);
-    if (!map_pix_buffers()) {
-      enabled = false;
-      return;
-    }
-    if (!configure_pix_isp()) {
-      enabled = false;
-      return;
-    }
-    if (v1_ioctl(video_fd, VFE_REG_UPDATE) != 0) {
-      LOGE("cam %d: initial VFE_REG_UPDATE failed: %d (%s)", cc.camera_num, errno, strerror(errno));
-      enabled = false;
-      return;
-    }
-    LOG("cam %d: VIPC buffers created (VFE PIX ioctl NV12, %ux%u, scale=%d, %u bytes, stride=%u)",
-        cam_idx, output_width, output_height, output_scale, yuv_size, stride);
+  if (access("/dev/dma_heap/system", R_OK | W_OK) != 0) {
+    LOGE("cam %d: required DMA heap is unavailable: %d (%s)", cam_idx, errno, strerror(errno));
+    enabled = false;
     return;
   }
 
@@ -1282,7 +1073,6 @@ void OneCamera::camera_open(VisionIpcServer *v) {
 
 void OneCamera::queue_all_buffers() {
   if (!enabled) return;
-  if (use_custom_pix_ioctl()) return;
 
   for (int i = 0; i < n_bufs; i++) {
     queue_frame(i);
@@ -1291,44 +1081,6 @@ void OneCamera::queue_all_buffers() {
 
 void OneCamera::stream_on() {
   if (!enabled) return;
-
-  if (use_custom_pix_ioctl()) {
-    if (v1_ioctl(video_fd, VFE_START) != 0) {
-      LOGE("cam %d: VFE_START failed: %d (%s)", cc.camera_num, errno, strerror(errno));
-      enabled = false;
-      return;
-    }
-
-    pix_current_idx = 0;
-    pix_next_idx = 1;
-    if (!set_pix_buffer(pix_current_idx)) {
-      v1_ioctl(video_fd, VFE_STOP);
-      enabled = false;
-      return;
-    }
-
-    if (!write_sensor_regs(sensor_fd, sensor->start_reg_array, "start", cc.camera_num)) {
-      v1_ioctl(video_fd, VFE_STOP);
-      enabled = false;
-      return;
-    }
-
-    if (!apply_vfe_tuning()) {
-      v1_ioctl(video_fd, VFE_STOP);
-      enabled = false;
-      return;
-    }
-
-    if (!apply_vfe_gamma()) {
-      v1_ioctl(video_fd, VFE_STOP);
-      enabled = false;
-      return;
-    }
-
-    streaming = true;
-    LOG("cam %d: VFE PIX streaming started", cc.camera_num);
-    return;
-  }
 
   int type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
   if (ioctl(video_fd, VIDIOC_STREAMON, &type) != 0) {
@@ -1359,30 +1111,19 @@ void OneCamera::stream_on() {
   LOG("cam %d: VFE PIX V4L2 streaming started", cc.camera_num);
 }
 
-void OneCamera::start_streaming() {
-  queue_all_buffers();
-  stream_on();
-}
-
 void OneCamera::stop_streaming() {
   if (streaming && sensor_fd >= 0) {
     write_sensor_regs(sensor_fd, {{0x100, 0}}, "stop", cc.camera_num);
   }
 
   if (video_fd >= 0 && streaming) {
-    if (use_custom_pix_ioctl()) {
-      v1_ioctl(video_fd, VFE_STOP);
-    } else {
-      int type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-      ioctl(video_fd, VIDIOC_STREAMOFF, &type);
-    }
+    int type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    ioctl(video_fd, VIDIOC_STREAMOFF, &type);
   }
   streaming = false;
 }
 
 void OneCamera::queue_frame(int index) {
-  if (use_custom_pix_ioctl()) return;
-
   struct v4l2_buffer vbuf = {};
   struct v4l2_plane planes[1] = {};
   vbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -1398,20 +1139,6 @@ void OneCamera::queue_frame(int index) {
 }
 
 int OneCamera::dequeue_frame(uint64_t *timestamp) {
-  if (use_custom_pix_ioctl()) {
-    if (v1_ioctl(video_fd, VFE_WAIT_SOF) != 0) return -errno;
-
-    *timestamp = nanos_since_boot();
-    int ready_idx = pix_current_idx;
-    pix_current_idx = pix_next_idx;
-    pix_next_idx = (pix_next_idx + 1) % VIPC_BUFFER_COUNT;
-    if (!set_pix_buffer(pix_current_idx)) return -EIO;
-
-    const uint32_t readout_us = (sensor->readout_time_ns + 999) / 1000;
-    usleep(readout_us + 1000);
-    return ready_idx;
-  }
-
   struct pollfd pfd = {video_fd, POLLIN, 0};
   int ret = poll(&pfd, 1, 20);
   if (ret == 0) return -ETIMEDOUT;
@@ -1441,16 +1168,6 @@ void OneCamera::set_exposure(int exposure_time, int gain_idx) {
 void OneCamera::camera_close() {
   if (video_fd >= 0) {
     stop_streaming();
-    if (use_custom_pix_ioctl()) {
-      for (int i = 0; i < VIPC_BUFFER_COUNT; i++) {
-        if (pix_iovas[i] != 0) {
-          VfeUnmapBufCmd cmd = {.iova = pix_iovas[i]};
-          v1_ioctl(video_fd, VFE_UNMAP_BUF, &cmd);
-          pix_iovas[i] = 0;
-          pix_map_sizes[i] = 0;
-        }
-      }
-    }
     close(video_fd);
     video_fd = -1;
   }
@@ -1473,11 +1190,8 @@ class CameraState {
 public:
   OneCamera camera;
   int exposure_time = 1600;
-  bool dc_gain_enabled = false;
-  int dc_gain_weight = 0;
   int gain_idx = 8;
-  float analog_gain_frac = 0;
-  float cur_ev[3] = {};
+  float current_ev = 0;
   float os04_ev_history[OS04_AE_HISTORY_SIZE] = {};
   float best_ev_score = 0;
   int new_exp_g = 0;
@@ -1520,9 +1234,6 @@ public:
   void init_awb();
   void update_awb(const uint8_t *nv12);
 
-  float get_gain_factor() const {
-    return (1 + dc_gain_weight * (camera.sensor->dc_gain_factor-1) / camera.sensor->dc_gain_max_weight);
-  }
 };
 
 void CameraState::init(VisionIpcServer *v) {
@@ -1539,14 +1250,12 @@ void CameraState::init(VisionIpcServer *v) {
   fl_pix = camera.cc.focal_len / camera.sensor->pixel_size_mm;
   pm = std::make_unique<PubMaster>(std::vector{camera.cc.publish_name});
 
-  if (camera.sensor->image_sensor == cereal::FrameData::ImageSensor::OS04C10) {
-    exposure_time = std::clamp(600, camera.sensor->exposure_time_min, camera.sensor->exposure_time_max);
-    gain_idx = camera.sensor->analog_gain_rec_idx;
-    target_grey_fraction = default_os04_target_grey(camera.cc.camera_num);
-  }
+  exposure_time = std::clamp(600, camera.sensor->exposure_time_min, camera.sensor->exposure_time_max);
+  gain_idx = camera.sensor->analog_gain_rec_idx;
+  target_grey_fraction = default_os04_target_grey(camera.cc.camera_num);
 
   float gain = camera.sensor->sensor_analog_gains[gain_idx];
-  cur_ev[0] = cur_ev[1] = cur_ev[2] = gain * exposure_time;
+  current_ev = gain * exposure_time;
   std::fill(std::begin(os04_ev_history), std::end(os04_ev_history), gain * exposure_time);
   camera.set_exposure(exposure_time, gain_idx);
 
@@ -1702,10 +1411,7 @@ static Nv12ChromaMedian calculate_chroma_median_nv12(const uint8_t *base, int st
 }
 
 void CameraState::init_awb() {
-  if (!camera.enabled || !camera.use_pix || !camera.sensor ||
-      camera.sensor->image_sensor != cereal::FrameData::ImageSensor::OS04C10) {
-    return;
-  }
+  if (!camera.enabled) return;
   const Os04VfeWbRegs wb = default_os04_vfe_wb_regs(camera.cc.camera_num);
   if (!wb.valid) return;
 
@@ -1794,20 +1500,16 @@ void CameraState::set_camera_exposure(const Os04AeSample &ae_sample) {
   const int old_exp_t = exposure_time;
   const int old_gain_idx = gain_idx;
 
-  const bool os04 = sens->image_sensor == cereal::FrameData::ImageSensor::OS04C10;
-  const float cur_ev_ = os04 ?
+  const float cur_ev_ =
       os04_ev_history[(frame_id + OS04_AE_HISTORY_SIZE - OS04_EXPOSURE_DELAY_FRAMES) %
-                      OS04_AE_HISTORY_SIZE] :
-      cur_ev[(frame_id - 1) % 3];
+                      OS04_AE_HISTORY_SIZE];
   const float commanded_ev = exposure_time * sens->sensor_analog_gains[gain_idx];
-  float new_target_grey = os04 ?
-                          default_os04_target_grey(camera.cc.camera_num) :
-                          std::clamp(0.4f - 0.3f * (float)(log2(1.0 + sens->target_grey_factor*cur_ev_) / log2(6000.0)), 0.1f, 0.4f);
+  const float new_target_grey = default_os04_target_grey(camera.cc.camera_num);
   float target_grey = (1.0f - k_grey) * target_grey_fraction + k_grey * new_target_grey;
 
   const float grey_frac = std::clamp(ae_sample.grey_frac, 1.0f / 256.0f, 1.0f);
   float desired_ev = std::clamp(cur_ev_ * target_grey / grey_frac, sens->min_ev, sens->max_ev);
-  if (os04 && ae_sample.rgb_clip_hi_frac > 0.0f) {
+  if (ae_sample.rgb_clip_hi_frac > 0.0f) {
     constexpr float clip_limit = 0.08f;
     if (ae_sample.rgb_clip_hi_frac > clip_limit) {
       const float response = default_os04_ae_rgb_clip_response(camera.cc.camera_num);
@@ -1823,18 +1525,13 @@ void CameraState::set_camera_exposure(const Os04AeSample &ae_sample) {
     }
   }
 
-  if (os04) {
-    desired_ev = (1.0f - k_ev) * commanded_ev + k_ev * desired_ev;
-  } else {
-    float k = (1.0f - k_ev) / 3.0f;
-    desired_ev = (k * cur_ev[0]) + (k * cur_ev[1]) + (k * cur_ev[2]) + (k_ev * desired_ev);
-  }
+  desired_ev = (1.0f - k_ev) * commanded_ev + k_ev * desired_ev;
 
   best_ev_score = 1e6;
   new_exp_g = 0;
   new_exp_t = 0;
 
-  const int gain_step = os04 ? 4 : 1;
+  constexpr int gain_step = 4;
   int min_g = std::max(gain_idx - gain_step, sens->analog_gain_min_idx);
   int max_g = std::min(gain_idx + gain_step, sens->analog_gain_max_idx);
   for (int g = min_g; g <= max_g; g++) {
@@ -1845,13 +1542,12 @@ void CameraState::set_camera_exposure(const Os04AeSample &ae_sample) {
 
   measured_grey_fraction = grey_frac;
   target_grey_fraction = target_grey;
-  analog_gain_frac = sens->sensor_analog_gains[new_exp_g];
   gain_idx = new_exp_g;
   exposure_time = new_exp_t;
 
-  const float new_ev = exposure_time * analog_gain_frac;
-  cur_ev[frame_id % 3] = new_ev;
-  if (os04) os04_ev_history[frame_id % OS04_AE_HISTORY_SIZE] = new_ev;
+  const float new_ev = exposure_time * sens->sensor_analog_gains[gain_idx];
+  current_ev = new_ev;
+  os04_ev_history[frame_id % OS04_AE_HISTORY_SIZE] = new_ev;
   if (exposure_time != old_exp_t || gain_idx != old_gain_idx) {
     camera.set_exposure(exposure_time, gain_idx);
   }
@@ -1887,7 +1583,7 @@ void CameraState::process_pix_frame(int buf_idx, uint64_t timestamp) {
   framed.setSensor(camera.sensor->image_sensor);
   framed.setMeasuredGreyFraction(measured_grey_fraction);
   framed.setTargetGreyFraction(target_grey_fraction);
-  framed.setExposureValPercent(util::map_val(cur_ev[frame_id % 3],
+  framed.setExposureValPercent(util::map_val(current_ev,
     camera.sensor->min_ev, camera.sensor->max_ev, 0.0f, 100.0f));
   pm->send(camera.cc.publish_name, msg);
 }
@@ -1904,9 +1600,8 @@ void camerad_thread() {
   }
   for (int i = 0; i < 3; i++) {
     v1_cams[i] = resolve_cam_config(media_fd, i);
-    LOG("cam %d: csiphy=%u csid=%u vfe_rdi=%u rdi_dev=%d vfe_pix=%u pix_dev=%d pix_subdev=%d",
+    LOG("cam %d: csiphy=%u csid=%u vfe_pix=%u pix_dev=%d pix_subdev=%d",
         i, v1_cams[i].csiphy_entity, v1_cams[i].csid_entity,
-        v1_cams[i].vfe_rdi_entity, v1_cams[i].rdi_video_dev,
         v1_cams[i].vfe_pix_entity, v1_cams[i].pix_video_dev, v1_cams[i].vfe_pix_subdev);
   }
   close(media_fd);
@@ -1915,7 +1610,6 @@ void camerad_thread() {
 
   std::vector<std::unique_ptr<CameraState>> cams;
   for (const auto &config : ALL_CAMERA_CONFIGS) {
-    if (config.camera_num > 2) continue;
     auto cam = std::make_unique<CameraState>(config);
     cam->init(&v);
     cams.emplace_back(std::move(cam));
@@ -1942,7 +1636,6 @@ void camerad_thread() {
       uint64_t timestamp;
       int buf_idx = cam->camera.dequeue_frame(&timestamp);
       if (buf_idx < 0) {
-        if (env_debug_frames) printf("cam %d: dequeue timeout\n", cam->camera.cc.camera_num);
         if (buf_idx != -ETIMEDOUT) {
           LOGW_100("cam %d: dequeue failed: %d (%s)", cam->camera.cc.camera_num, -buf_idx, strerror(-buf_idx));
           usleep(1000);
@@ -1950,22 +1643,8 @@ void camerad_thread() {
         continue;
       }
 
-      if (cam->camera.use_direct_vipc_buffers()) {
-        cam->process_pix_frame(buf_idx, timestamp);
-      } else {
-        LOGE("cam %d: refusing non-DMABUF CPU-copy camera path on hardware VFE branch",
-             cam->camera.cc.camera_num);
-        continue;
-      }
-
-      if (env_debug_frames) {
-        printf("cam %d frame %u buf %d ts %.2f ms exp %d gain %.3f (%s)\n",
-               cam->camera.cc.camera_num, cam->frame_id, buf_idx, timestamp / 1e6,
-               cam->exposure_time, cam->camera.sensor->sensor_analog_gains[cam->gain_idx],
-               cam->camera.use_pix_v4l2 ? "VFE PIX V4L2" : "VFE PIX ioctl");
-      }
-
-      if (!cam->camera.use_custom_pix_ioctl()) cam->camera.queue_frame(buf_idx);
+      cam->process_pix_frame(buf_idx, timestamp);
+      cam->camera.queue_frame(buf_idx);
     }
   }
 

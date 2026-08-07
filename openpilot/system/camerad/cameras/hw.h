@@ -4,12 +4,12 @@
 #include "openpilot/cereal/gen/cpp/log.capnp.h"
 #include "msgq/visionipc/visionipc_server.h"
 
-#if __has_include("media/cam_isp_ife.h")
-#include "media/cam_isp_ife.h"
-#else
+#ifdef __VENUS_ENCODER__
 #define CAM_ISP_IFE_IN_RES_PHY_0 0
 #define CAM_ISP_IFE_IN_RES_PHY_1 1
 #define CAM_ISP_IFE_IN_RES_PHY_2 2
+#else
+#include "media/cam_isp_ife.h"
 #endif
 
 

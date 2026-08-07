@@ -12,11 +12,11 @@
 
 #ifdef __COMMA_HARDWARE__
 #include "system/loggerd/encoder/v4l_encoder.h"
+#elif defined(__ASIUS_HARDWARE__)
+#include "system/loggerd/encoder/ffmpeg_encoder.h"
+#include "system/loggerd/encoder/venus_encoder.h"
 #else
 #include "system/loggerd/encoder/ffmpeg_encoder.h"
-#ifdef __ASIUS_HARDWARE__
-#include "system/loggerd/encoder/venus_encoder.h"
-#endif
 #endif
 
 ExitHandler do_exit;
