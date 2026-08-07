@@ -4,7 +4,7 @@ import time
 from openpilot.common.qrcode import make_texture
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
-from openpilot.system.athena.websocketd import PAIRING_MODE_SECONDS, pairing_url
+from openpilot.system.app.websocketd import PAIRING_MODE_SECONDS, pairing_url
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.multilang import tr

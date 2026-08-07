@@ -1,7 +1,7 @@
 import json
 
-from openpilot.system.athena import websocketd
-from openpilot.system.athena.tests.test_websocketd import (
+from openpilot.system.app import websocketd
+from openpilot.system.app.tests.test_websocketd import (
   RECIPIENT_PRIVATE_KEY,
   RECIPIENT_PUBLIC_KEY,
   SENDER_PRIVATE_KEY,

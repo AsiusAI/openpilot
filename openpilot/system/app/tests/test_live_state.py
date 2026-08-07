@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.system.athena import asius_athenad as athenad
+from openpilot.system.app import methods as athenad
 
 
 class FakeParams:

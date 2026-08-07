@@ -1,6 +1,6 @@
 from openpilot.common.params import Params
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.system.athena.athenad import dispatcher
+from openpilot.system.app.methods import dispatcher
 
 
 class TestStreamingWithoutCarParams(OpenpilotTestCase):

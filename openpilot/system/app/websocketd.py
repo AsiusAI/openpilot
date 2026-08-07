@@ -279,7 +279,7 @@ def backoff(retries: int) -> int:
 
 
 def main(exit_event: threading.Event | None = None):
-  from openpilot.system.athena import asius_athenad as athenad
+  from openpilot.system.app import methods
 
   try:
     set_core_affinity([0, 1, 2, 3])
@@ -288,7 +288,7 @@ def main(exit_event: threading.Event | None = None):
 
   params = Params()
   dongle_id = params.get("DongleId")
-  athenad.UploadQueueCache.initialize(athenad.upload_queue)
+  methods.UploadQueueCache.initialize(methods.upload_queue)
 
   api = Api(dongle_id)
 
@@ -300,21 +300,21 @@ def main(exit_event: threading.Event | None = None):
         conn_start = time.monotonic()
 
       token = api.get_token()
-      ws_uri = athenad.ATHENA_HOST + "/ws/v2/" + dongle_id + "?token=" + token
+      ws_uri = methods.ATHENA_HOST + "/ws/v2/" + dongle_id + "?token=" + token
       token_header = jwt.get_unverified_header(token)
-      cloudlog.event("athenad.main.connecting_ws", ws_uri=athenad.ATHENA_HOST + "/ws/v2/" + dongle_id, retries=conn_retries,
+      cloudlog.event("athenad.main.connecting_ws", ws_uri=methods.ATHENA_HOST + "/ws/v2/" + dongle_id, retries=conn_retries,
                      token_alg=token_header.get("alg"), token_len=len(token))
       ws = create_connection(ws_uri,
                              enable_multithread=True,
                              timeout=30.0)
-      cloudlog.event("athenad.main.connected_ws", ws_uri=athenad.ATHENA_HOST + "/ws/v2/" + dongle_id, retries=conn_retries,
+      cloudlog.event("athenad.main.connected_ws", ws_uri=methods.ATHENA_HOST + "/ws/v2/" + dongle_id, retries=conn_retries,
                      duration=time.monotonic() - conn_start)
       conn_start = None
 
       conn_retries = 0
-      athenad.cur_upload_items.clear()
+      methods.cur_upload_items.clear()
 
-      athenad.handle_long_poll(ws, exit_event)
+      methods.handle_long_poll(ws, exit_event)
 
       ws.close()
     except (KeyboardInterrupt, SystemExit):

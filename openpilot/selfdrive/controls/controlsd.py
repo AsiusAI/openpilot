@@ -26,7 +26,6 @@ from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
-NO_DCAM = os.getenv("NO_DCAM") == "1"
 
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 
@@ -202,8 +201,7 @@ class Controls:
     cs.upAccelCmd = float(self.LoC.pid.p)
     cs.uiAccelCmd = float(self.LoC.pid.i)
     cs.ufAccelCmd = float(self.LoC.pid.f)
-    cs.forceDecel = bool((not NO_DCAM and self.sm['driverMonitoringState'].noResponseForceDecel) or
-                         (self.sm['selfdriveState'].state == State.softDisabling))
+    cs.forceDecel = bool(self.sm['driverMonitoringState'].noResponseForceDecel or self.sm['selfdriveState'].state == State.softDisabling)
 
     # trigger the car's stock driver monitoring escalation
     CC.driverMonitoringEscalation = cs.forceDecel

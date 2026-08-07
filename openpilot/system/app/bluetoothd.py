@@ -15,9 +15,9 @@ from dbus_fast.service import ServiceInterface, dbus_method, dbus_property
 
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
-from openpilot.system.athena import asius_athenad as athenad
-from openpilot.system.athena.ble_pairing import authorize_ble_peer
-from openpilot.system.athena.ble_protocol import (
+from openpilot.system.app import methods
+from openpilot.system.app.ble_pairing import authorize_ble_peer
+from openpilot.system.app.ble_protocol import (
   BLE_RX_UUID,
   BLE_SERVICE_UUID,
   BLE_TX_UUID,
@@ -27,8 +27,8 @@ from openpilot.system.athena.ble_protocol import (
   FrameError,
   encode_frames,
 )
-from openpilot.system.athena.terminal import TerminalManager
-from openpilot.system.athena.websocketd import (
+from openpilot.system.app.terminal import TerminalManager
+from openpilot.system.app.websocketd import (
   load_authorized_peers,
   pack_peer_message,
   pairing_mode_active,
@@ -233,7 +233,7 @@ class BlePeerEngine:
     self.peer_clocks: dict[str, tuple[int, float]] = {}
     self.params = Params()
     self.dongle_id = self.params.get("DongleId")
-    self.sm = messaging.SubMaster(athenad.LIVE_STATE_SERVICES)
+    self.sm = messaging.SubMaster(methods.LIVE_STATE_SERVICES)
     self.loop: asyncio.AbstractEventLoop | None = None
     self.terminal_output: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(maxsize=TERMINAL_OUTPUT_QUEUE_SIZE)
     self.terminal_manager = TerminalManager(self.queue_terminal_output)
@@ -334,9 +334,9 @@ class BlePeerEngine:
 
   async def handle_call(self, sender: str, body: dict[str, Any]) -> None:
     if hasattr(athenad, "handle"):
-      response = await asyncio.to_thread(lambda: json.loads(athenad.handle(body, athenad.dispatcher)))
+      response = await asyncio.to_thread(lambda: json.loads(methods.handle(body, methods.dispatcher)))
     else:
-      response = await asyncio.to_thread(lambda: json.loads(athenad.JSONRPCResponseManager.handle(json.dumps(body), athenad.dispatcher).json))
+      response = await asyncio.to_thread(lambda: json.loads(methods.JSONRPCResponseManager.handle(json.dumps(body), methods.dispatcher).json))
     await self.send_body(sender, response)
 
   async def handle_encrypted(self, payload: bytes) -> None:
@@ -374,7 +374,7 @@ class BlePeerEngine:
     elif message_type == "athena-call" or body.get("method"):
       await self.handle_call(sender, body)
     elif message_type == "athena-response":
-      athenad.log_recv_queue.put_nowait(json.dumps({
+      methods.log_recv_queue.put_nowait(json.dumps({
         "jsonrpc": "2.0",
         "id": body.get("id"),
         "result": body.get("result"),
@@ -422,7 +422,7 @@ class BlePeerEngine:
         now = time.monotonic()
         self.active_peers = {peer: seen for peer, seen in self.active_peers.items() if now - seen < ACTIVE_PEER_SECONDS}
         if self.tx.notifying and self.active_peers:
-          snapshot = athenad._live_state_snapshot(self.sm, self.params)
+          snapshot = methods._live_state_snapshot(self.sm, self.params)
           for peer in list(self.active_peers):
             if peer in load_authorized_peers():
               await self.send_body(peer, {"type": "event", "name": "liveState", "payload": snapshot})

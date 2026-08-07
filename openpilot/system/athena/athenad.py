@@ -812,13 +812,7 @@ def startStream(sdp: str, enabled: bool) -> dict:
       cloudlog.event("athena.startStream.webrtcd_offroad_start_timeout", error=True)
       raise
 
-  return post_stream_request(StreamRequestBody(
-    sdp,
-    ["wideRoad"],
-    enabled,
-    bridge_services_in,
-    ["carState", "deviceState", "modelV2", "liveCalibration"],
-  ))
+  return post_stream_request(StreamRequestBody(sdp, ["wideRoad"], enabled, bridge_services_in, ["carState", "deviceState"]))
 
 
 def get_logs_to_send_sorted() -> list[str]:

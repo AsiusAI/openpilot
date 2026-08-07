@@ -15,8 +15,8 @@ from openpilot.common.parameterized import parameterized
 from openpilot.common.params import Params
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.common.timeout import Timeout
-from openpilot.system.athena import asius_athenad as athenad
-from openpilot.system.athena.asius_athenad import MAX_RETRY_COUNT, UPLOAD_SESS, dispatcher
+from openpilot.system.app import methods as athenad
+from openpilot.system.app.methods import MAX_RETRY_COUNT, UPLOAD_SESS, dispatcher
 from openpilot.system.athena.tests.helpers import HTTPRequestHandler, MockApi
 from openpilot.selfdrive.test.helpers import http_server_context
 from openpilot.common.hardware.hw import Paths
@@ -263,7 +263,7 @@ class TestAthenadMethods(OpenpilotTestCase):
   @parameterized.expand([(500,True), (412,False)], names=("status", "retry"))
   @with_upload_handler
   def test_upload_handler_retry(self, mocker, host, status, retry):
-    mock_put = mocker.patch('openpilot.system.athena.asius_athenad.UPLOAD_SESS.put')
+    mock_put = mocker.patch('openpilot.system.app.methods.UPLOAD_SESS.put')
     mock_put.return_value.__enter__.return_value.status_code = status
     fn = self._create_file('qlog.zst')
     item = athenad.UploadItem(path=fn, url=f"{host}/qlog.zst", headers={}, created_at=int(time.time()*1000), id='', allow_cellular=True)  # noqa: TID251

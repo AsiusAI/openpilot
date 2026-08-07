@@ -2,7 +2,7 @@ import json
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from openpilot.system.athena import websocketd
+from openpilot.system.app import websocketd
 from openpilot.system.athena.identity import bytes_to_identity, identity_to_bytes, is_dongle_id
 
 

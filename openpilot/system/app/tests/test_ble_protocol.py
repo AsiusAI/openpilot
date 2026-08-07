@@ -1,5 +1,5 @@
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.system.athena.ble_protocol import (
+from openpilot.system.app.ble_protocol import (
   FRAME_END,
   FRAME_HEADER,
   FRAME_START,

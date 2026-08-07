@@ -1,7 +1,7 @@
 import asyncio
 
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.system.athena import bled
+from openpilot.system.app import bluetoothd as bled
 
 
 APP_KEY = "11111111111111111111111111111111111111111111"
