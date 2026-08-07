@@ -16,10 +16,9 @@ def authorize_ble_peer(public_key: str, request_id: str, label: str | None = Non
   if label is not None and len(label) > 80:
     raise ValueError("pairing label is too long")
 
-  peer = authorize_peer(public_key, label=label)
+  authorize_peer(public_key, label=label)
   disable_pairing_mode()
   return {
     "publicKey": public_key,
     "requestId": request_id,
-    "aclEpoch": int(peer["aclEpoch"]),
   }

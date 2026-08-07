@@ -23,7 +23,6 @@ from openpilot.system.athena.identity import identity_to_bytes, is_dongle_id
 
 
 ATHENA_AUTHORIZED_KEYS_PARAM = "AthenadAuthorizedKeys"
-ATHENA_ACL_EPOCH_PARAM = "AthenadAuthorizedKeysEpoch"
 ATHENA_PAIRING_UNTIL_PARAM = "AthenadPairingUntil"
 PARAMS_DIR = Path(os.getenv("PARAMS_DIR", "/data/params/d"))
 MAX_PAYLOAD_AGE_SECONDS = 60
@@ -69,19 +68,6 @@ def remove_raw_param(key: str) -> None:
     pass
 
 
-def get_acl_epoch() -> int:
-  try:
-    return int(read_raw_param(ATHENA_ACL_EPOCH_PARAM) or "0")
-  except ValueError:
-    return 0
-
-
-def bump_acl_epoch() -> int:
-  epoch = get_acl_epoch() + 1
-  write_raw_param(ATHENA_ACL_EPOCH_PARAM, str(epoch))
-  return epoch
-
-
 def enable_pairing_mode(duration_seconds: int = PAIRING_MODE_SECONDS) -> int:
   pairing_until = int(wall_time()) + duration_seconds
   write_raw_param(ATHENA_PAIRING_UNTIL_PARAM, str(pairing_until))
@@ -113,8 +99,6 @@ def load_authorized_peers() -> dict[str, dict[str, str | int]]:
           record["label"] = peer["label"]
         if isinstance(peer.get("createdAt"), (int, float)):
           record["createdAt"] = int(peer["createdAt"])
-        if isinstance(peer.get("aclEpoch"), (str, int)):
-          record["aclEpoch"] = peer["aclEpoch"]
       peers[public_key] = record
     return peers
   except Exception:
@@ -133,7 +117,6 @@ def authorize_peer(public_key: str, label: str | None = None) -> dict[str, str |
   peer = peers.get(public_key, {"publicKey": public_key, "createdAt": int(wall_time())})
   if label:
     peer["label"] = label
-  peer["aclEpoch"] = str(bump_acl_epoch())
   peers[public_key] = peer
   save_authorized_peers(peers)
 
@@ -158,13 +141,13 @@ def sign_jwt(payload: dict, expiry_seconds: int) -> str:
   return jwt.encode({**payload, "iat": now, "nbf": now, "exp": now + expiry_seconds}, identity_private_key(), algorithm="EdDSA")
 
 
-def pairing_token(recipient: str, acl_epoch: int, expiry_seconds: int = PAIRING_MODE_SECONDS) -> str:
-  return sign_jwt({"type": "pair", "to": recipient, "aclEpoch": acl_epoch}, expiry_seconds)
+def pairing_token(recipient: str, expiry_seconds: int = PAIRING_MODE_SECONDS) -> str:
+  return sign_jwt({"type": "pair", "to": recipient}, expiry_seconds)
 
 
 def pairing_url(recipient: str) -> str:
   enable_pairing_mode()
-  return f"https://app.asius.ai/#pair={pairing_token(recipient, get_acl_epoch())}"
+  return f"https://app.asius.ai/#pair={pairing_token(recipient)}"
 
 
 def verify_identity_signature(public_key: str, signature: str, data: bytes) -> bool:

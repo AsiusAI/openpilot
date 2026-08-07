@@ -62,7 +62,7 @@ class TestBled(OpenpilotTestCase):
         {"type": "ble-pair-request", "publicKey": APP_KEY, "requestId": "request-1"},
         False,
       ))
-      monkeypatch.setattr(bled, "load_authorized_peers", lambda: {APP_KEY: {"aclEpoch": 4}})
+      monkeypatch.setattr(bled, "load_authorized_peers", lambda: {APP_KEY: {}})
 
       async def send_body(recipient, body, initial=False):
         sent.append((recipient, body, initial))
@@ -70,8 +70,11 @@ class TestBled(OpenpilotTestCase):
 
       engine.send_body = send_body
       await engine.handle_encrypted(b"authenticated-envelope")
-      assert sent[-1][1]["type"] == "pair-response"
-      assert sent[-1][1]["aclEpoch"] == 4
+      assert sent[-1][1] == {
+        "type": "pair-response",
+        "publicKey": DEVICE_KEY,
+        "device-type": bled.DEVICE_TYPE,
+      }
 
     asyncio.run(run())
 
@@ -194,7 +197,7 @@ class TestBled(OpenpilotTestCase):
       engine = make_engine()
       sent = []
       monkeypatch.setattr(bled.time, "monotonic", lambda: 105.0)
-      monkeypatch.setattr(bled, "authorize_ble_peer", lambda *_args: {"aclEpoch": 4})
+      monkeypatch.setattr(bled, "authorize_ble_peer", lambda *_args: {})
 
       async def send_body(recipient, body, initial=False):
         sent.append((recipient, body, initial))
@@ -211,7 +214,6 @@ class TestBled(OpenpilotTestCase):
         "type": "pair-response",
         "publicKey": DEVICE_KEY,
         "device-type": bled.DEVICE_TYPE,
-        "aclEpoch": 4,
       }, False)]
 
     asyncio.run(run())

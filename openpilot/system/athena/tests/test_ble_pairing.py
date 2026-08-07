@@ -24,11 +24,11 @@ def pairing_params(tmp_path, monkeypatch):
 class TestBlePairing(OpenpilotTestCase):
   def test_first_request_is_authorized_and_closes_pairing_mode(self, pairing_params, monkeypatch):
     authorized = []
-    monkeypatch.setattr(ble_pairing, "authorize_peer", lambda public_key, label=None: authorized.append((public_key, label)) or {"aclEpoch": "4"})
+    monkeypatch.setattr(ble_pairing, "authorize_peer", lambda public_key, label=None: authorized.append((public_key, label)))
 
     peer = ble_pairing.authorize_ble_peer(APP_KEY, "request-1", "phone")
 
-    assert peer == {"publicKey": APP_KEY, "requestId": "request-1", "aclEpoch": 4}
+    assert peer == {"publicKey": APP_KEY, "requestId": "request-1"}
     assert authorized == [(APP_KEY, "phone")]
     assert not websocketd.pairing_mode_active()
 
