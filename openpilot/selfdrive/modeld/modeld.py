@@ -16,6 +16,7 @@ from openpilot.cereal.services import SERVICE_LIST
 from msgq.visionipc import VisionIpcClient, VisionStreamType, VisionBuf
 from opendbc.car.car_helpers import get_demo_car_params
 from openpilot.common.swaglog import cloudlog
+from openpilot.common.hardware import V1
 from openpilot.common.params import Params
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import config_realtime_process, DT_MDL
@@ -31,10 +32,16 @@ from openpilot.common.file_chunker import open_file_chunked
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
 from openpilot.selfdrive.modeld.helpers import usbgpu_present, usbgpu_compiled, modeld_pkl_path, get_tg_input_devices, load_oob
 
+if V1:
+  import ctypes
+  from tinygrad.runtime.autogen import opencl as cl
+  from openpilot.selfdrive.modeld.compile_modeld_v1 import make_input_queues as make_v1_input_queues
+  from openpilot.selfdrive.modeld.modeld_v1 import FastCLWarp, ImportedCLFrame
+
 PROCESS_NAME = "openpilot.selfdrive.modeld.modeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 
-LAT_SMOOTH_SECONDS = 0.0
+LAT_SMOOTH_SECONDS = 0.1 if V1 else 0.0
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
 BIG_MODEL_TIMEOUT = 60
@@ -126,6 +133,7 @@ class ModelState:
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
   def __init__(self, cam_w: int, cam_h: int, usbgpu: bool):
+    assert not (V1 and usbgpu)
     input_devices = get_tg_input_devices(PROCESS_NAME, usbgpu)
     self.WARP_DEV, self.QUEUE_DEV = input_devices['WARP_DEV'], input_devices['QUEUE_DEV']
     jits = load_oob(open_file_chunked(modeld_pkl_path(usbgpu)))
@@ -133,33 +141,79 @@ class ModelState:
     self.input_shapes = metadata['input_shapes']
     self.vision_input_names = [k for k in self.input_shapes if 'img' in k]
     self.output_slices = metadata['output_slices']
+    self.model_output: np.ndarray | None = None
 
     self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
     self.usbgpu = usbgpu
 
     self.frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
-    self.input_queues, self.npy = make_input_queues(self.input_shapes, self.frame_skip, device=self.QUEUE_DEV)
+    self.make_input_queues = make_v1_input_queues if V1 else make_input_queues
+    self.input_queues, self.npy = self.make_input_queues(self.input_shapes, self.frame_skip, device=self.QUEUE_DEV)
     self.full_frames: dict[str, Tensor] = {}
-    self._blob_cache: dict[tuple[str, int], Tensor] = {}
-    self.parser = Parser()
+    self.parser = Parser(inplace=V1)
     self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in ('img', 'big_img')}
     self.run_policy = jits['run_policy']
-    self.warp = jits[(cam_w,cam_h)]
+    if V1:
+      stride, y_height, _, _ = self.frame_buf_params['img']
+      self.frame_buf_used_size = stride * (y_height + cam_h // 2)
+      assert jits.get('direct_images') and self.WARP_DEV == self.QUEUE_DEV and self.WARP_DEV.startswith("CL")
+      self.cl_warp = FastCLWarp(self.WARP_DEV, cam_w, cam_h, stride, y_height, self.input_shapes['img'], self.frame_skip)
+      self.cl_import_enabled, self.prewarped = True, None
+      self.cl_imported_frames, self.cl_uploaded_frames = {}, {}
+      warm_frames = {name: Tensor.zeros(self.input_shapes[name], dtype='uint8', device=self.WARP_DEV).realize() for name in self.vision_input_names}
+      for _ in range(10):
+        out, = self.run_policy(**self.input_queues, **warm_frames)
+        out.numpy()
+      self.input_queues, self.npy = self.make_input_queues(self.input_shapes, self.frame_skip, device=self.QUEUE_DEV)
+    else:
+      self._blob_cache: dict[tuple[str, int], Tensor] = {}
+      self.warp = jits[(cam_w,cam_h)]
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
     return parsed_model_outputs
 
+  def preload_frames(self, bufs: dict[str, VisionBuf], transforms: dict[str, np.ndarray] | None = None) -> None:
+    if not V1:
+      return
+    for key, buf in bufs.items():
+      yuv_size = self.frame_buf_used_size
+      frame = np.frombuffer(buf.data, dtype=np.uint8, count=yuv_size)
+      cache_key = (key, int(buf.fd), frame.ctypes.data, yuv_size)
+      if self.cl_import_enabled:
+        try:
+          if cache_key not in self.cl_imported_frames:
+            self.cl_imported_frames[cache_key] = ImportedCLFrame(int(buf.fd), frame.ctypes.data, yuv_size, self.WARP_DEV)
+          self.full_frames[key] = self.cl_imported_frames[cache_key].tensor
+          continue
+        except RuntimeError as e:
+          cloudlog.warning("disabling CL dma-buf frame import: %s", e)
+          self.cl_import_enabled = False
+      if key not in self.cl_uploaded_frames:
+        self.cl_uploaded_frames[key] = Tensor.empty(yuv_size, dtype='uint8', device=self.WARP_DEV).realize()
+      frame_buffer = self.cl_uploaded_frames[key]._buffer()
+      frame_buffer.allocator._copyin(frame_buffer._buf, buf.data[:yuv_size])
+      self.full_frames[key] = self.cl_uploaded_frames[key]
+    if transforms is not None:
+      self.prewarped = self.cl_warp(self.full_frames['img'], self.full_frames['big_img'], transforms)
+    status = cl.clFlush(Device[self.WARP_DEV].queue)
+    if status != 0:
+      raise RuntimeError(f"failed to flush preloaded OpenCL work: status={status}")
+
   def run(self, bufs: dict[str, VisionBuf], transforms: dict[str, np.ndarray],
           inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray] | None:
-    for key in bufs.keys():
-      ptr = np.frombuffer(bufs[key].data, dtype=np.uint8).ctypes.data
-      yuv_size = self.frame_buf_params[key][3]
-      # There is a ringbuffer of imgs, just cache tensors pointing to all of them
-      cache_key = (key, ptr)
-      if cache_key not in self._blob_cache:
-        self._blob_cache[cache_key] = Tensor.from_blob(ptr, (yuv_size,), dtype='uint8', device=self.WARP_DEV)
-      self.full_frames[key] = self._blob_cache[cache_key]
+    if V1:
+      if any(key not in self.full_frames for key in bufs):
+        self.preload_frames(bufs)
+    else:
+      for key in bufs.keys():
+        ptr = np.frombuffer(bufs[key].data, dtype=np.uint8).ctypes.data
+        yuv_size = self.frame_buf_params[key][3]
+        # There is a ringbuffer of imgs, just cache tensors pointing to all of them
+        cache_key = (key, ptr)
+        if cache_key not in self._blob_cache:
+          self._blob_cache[cache_key] = Tensor.from_blob(ptr, (yuv_size,), dtype='uint8', device=self.WARP_DEV)
+        self.full_frames[key] = self._blob_cache[cache_key]
 
     # Model decides when action is completed, so desire input is just a pulse triggered on rising edge
     inputs['desire_pulse'][0] = 0
@@ -167,15 +221,24 @@ class ModelState:
     self.prev_desire[:] = inputs['desire_pulse']
     self.npy['traffic_convention'][:] = inputs['traffic_convention']
     self.npy['action_t'][:] = inputs['action_t']
-    self.npy['tfm'][:,:] = transforms['img'][:,:]
-    self.npy['big_tfm'][:,:] = transforms['big_img'][:,:]
-
-    warped = self.warp(**{k: self.input_queues[k] for k in WARP_INPUTS}, frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
-
-    outs, = self.run_policy(
-      **{k: self.input_queues[k] for k in POLICY_INPUTS if k in self.input_queues}, warped=warped
-    )
-    model_output = outs.numpy()[0]
+    if V1:
+      img, big_img = self.prewarped or self.cl_warp(self.full_frames['img'], self.full_frames['big_img'], transforms)
+      self.prewarped = None
+      outs, = self.run_policy(**self.input_queues, img=img, big_img=big_img)
+      if self.model_output is None:
+        self.model_output = np.empty(outs.shape, dtype=np.float32)
+      status = cl.clEnqueueReadBuffer(Device[self.QUEUE_DEV].queue, outs._buffer()._buf, cl.CL_TRUE, 0,
+                                      self.model_output.nbytes, ctypes.c_void_p(self.model_output.ctypes.data), 0, None, None)
+      if status != 0:
+        raise RuntimeError(f"failed to read model output from OpenCL: status={status}")
+      Device[self.QUEUE_DEV].pending_copyin.clear()
+      model_output = self.model_output[0]
+    else:
+      self.npy['tfm'][:,:] = transforms['img'][:,:]
+      self.npy['big_tfm'][:,:] = transforms['big_img'][:,:]
+      warped = self.warp(**{k: self.input_queues[k] for k in WARP_INPUTS}, frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
+      outs, = self.run_policy(**{k: self.input_queues[k] for k in POLICY_INPUTS if k in self.input_queues}, warped=warped)
+      model_output = outs.numpy()[0]
     if self.usbgpu and not np.all(np.isfinite(model_output)):
       # TODO remove with prev_feat
       cloudlog.error("model output not finite, dropping frame")
@@ -188,11 +251,12 @@ class ModelState:
     return outputs_dict
 
   def warmup(self) -> None:
+    assert not V1
     dummy_frames = {k: np.zeros(self.frame_buf_params[k][3], dtype=np.uint8) for k in self.vision_input_names}
     eye = np.eye(3, dtype=np.float32)
     dims = {'desire_pulse': ModelConstants.DESIRE_LEN, 'traffic_convention': 2, 'action_t': 2}
     self.run(dummy_frames, dict.fromkeys(self.vision_input_names, eye), {k: np.zeros(v, dtype=np.float32) for k, v in dims.items()})
-    self.input_queues, self.npy = make_input_queues(self.input_shapes, self.frame_skip, device=self.QUEUE_DEV)
+    self.input_queues, self.npy = self.make_input_queues(self.input_shapes, self.frame_skip, device=self.QUEUE_DEV)
     self.prev_desire[:] = 0
     self.full_frames.clear()
     self._blob_cache.clear()
@@ -201,14 +265,14 @@ class ModelState:
 def main(demo=False):
   cloudlog.warning("modeld init")
 
-  USBGPU = usbgpu_present() and usbgpu_compiled()
+  USBGPU = not V1 and usbgpu_present() and usbgpu_compiled()
   if USBGPU:
     os.environ['HCQDEV_WAIT_TIMEOUT_MS'] = '3000'
   params = Params()
   params.put_bool("UsbGpuLoading", USBGPU)
   params.remove("UsbGpuActive")
 
-  config_realtime_process(7, 54)
+  config_realtime_process([6, 7] if V1 else 7, 54)
 
   # visionipc clients
   while True:
@@ -359,6 +423,7 @@ def main(demo=False):
 
     bufs = {name: buf_extra if 'big' in name else buf_main for name in model.vision_input_names}
     transforms = {name: model_transform_extra if 'big' in name else model_transform_main for name in model.vision_input_names}
+    model.preload_frames(bufs, transforms)
     frame_delay = DT_MDL # compensate for time passed since the frame was captured: current_time - timestamp_eof is 50ms on average
     action_delay = DT_MDL / 2 # middle of the interval between model output (current state) and next frame (expected state)
     lat_action_t = lat_delay + frame_delay + action_delay
