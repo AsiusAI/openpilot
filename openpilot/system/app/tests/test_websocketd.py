@@ -62,7 +62,7 @@ def test_pairing_mode_window(tmp_path, monkeypatch):
   monkeypatch.setattr(websocketd, "wall_time", lambda: now)
 
   assert not websocketd.pairing_mode_active()
-  assert websocketd.enable_pairing_mode() == 1_180
+  assert websocketd.enable_pairing_mode() == 1_300
   assert websocketd.pairing_mode_active()
 
   now = 1_181

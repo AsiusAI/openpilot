@@ -12,7 +12,7 @@ import numpy as np
 from openpilot.common.utils import tabulate
 
 from openpilot.common.git import get_commit
-from openpilot.common.hardware import PC
+from openpilot.common.hardware import PC, V1
 from openpilot.tools.lib.openpilotci import get_url
 from openpilot.selfdrive.test.process_replay.compare_logs import compare_logs, format_diff
 from openpilot.selfdrive.test.process_replay.process_replay import get_process_config, replay_process
@@ -200,7 +200,7 @@ def model_replay(lr, frs):
 
 def get_frames():
   regen_cache = "--regen-cache" in sys.argv
-  frames_cache = '/tmp/model_replay_cache' if PC else '/data/model_replay_cache'
+  frames_cache = '/tmp/model_replay_cache' if PC or V1 else '/data/model_replay_cache'
   os.makedirs(frames_cache, exist_ok=True)
 
   cache_name = f'{frames_cache}/{TEST_ROUTE}_{SEGMENT}_{START_FRAME}_{END_FRAME}.pkl'
@@ -225,7 +225,6 @@ def get_frames():
   return frs
 
 if __name__ == "__main__":
-  timing_only = "--timing-only" in sys.argv
   update = "--update" in sys.argv or (os.getenv("GIT_BRANCH", "") == 'master')
   replay_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -239,7 +238,7 @@ if __name__ == "__main__":
 
   # get diff
   failed = False
-  if not update and not timing_only:
+  if not update:
     log_fn = get_log_fn(TEST_ROUTE)
     try:
       all_logs = list(LogReader(GITHUB.get_file_url(MODEL_REPLAY_BUCKET, log_fn)))
@@ -258,26 +257,28 @@ if __name__ == "__main__":
         'driverStateV2.modelExecutionTime',
         'driverStateV2.gpuExecutionTime'
       ]
-      # Keep model replay comparison identical across PC and hardware.
-      ignore += ['modelV2.acceleration.x',
-                 'modelV2.position.x',
-                 'modelV2.position.xStd',
-                 'modelV2.position.y',
-                 'modelV2.position.yStd',
-                 'modelV2.position.z',
-                 'modelV2.position.zStd',
-                 'drivingModelData.path.xCoefficients',]
-      for i in range(3):
-        for field in ('x', 'y', 'v', 'a'):
-          ignore.append(f'modelV2.leadsV3.{i}.{field}')
-          ignore.append(f'modelV2.leadsV3.{i}.{field}Std')
-      for i in range(4):
-        for field in ('x', 'y', 'z', 't'):
-          ignore.append(f'modelV2.laneLines.{i}.{field}')
-      for i in range(2):
-        for field in ('x', 'y', 'z', 't'):
-          ignore.append(f'modelV2.roadEdges.{i}.{field}')
-      tolerance = .3
+      if PC or V1:
+        # TODO We ignore whole bunch so we can compare important stuff
+        # like posenet with reasonable tolerance
+        ignore += ['modelV2.acceleration.x',
+                   'modelV2.position.x',
+                   'modelV2.position.xStd',
+                   'modelV2.position.y',
+                   'modelV2.position.yStd',
+                   'modelV2.position.z',
+                   'modelV2.position.zStd',
+                   'drivingModelData.path.xCoefficients',]
+        for i in range(3):
+          for field in ('x', 'y', 'v', 'a'):
+            ignore.append(f'modelV2.leadsV3.{i}.{field}')
+            ignore.append(f'modelV2.leadsV3.{i}.{field}Std')
+        for i in range(4):
+          for field in ('x', 'y', 'z', 't'):
+            ignore.append(f'modelV2.laneLines.{i}.{field}')
+        for i in range(2):
+          for field in ('x', 'y', 'z', 't'):
+            ignore.append(f'modelV2.roadEdges.{i}.{field}')
+      tolerance = .3 if PC or V1 else None
       results: Any = {TEST_ROUTE: {}}
       log_paths: Any = {TEST_ROUTE: {"models": {'ref': log_fn, 'new': log_fn}}}
       results[TEST_ROUTE]["models"] = compare_logs(cmp_log, log_msgs, tolerance=tolerance, ignore_fields=ignore)
@@ -296,7 +297,7 @@ if __name__ == "__main__":
       failed = True
 
   # upload new refs
-  if update and not PC and not timing_only:
+  if update and not (PC or V1):
     print("Uploading new refs")
     log_fn = get_log_fn(TEST_ROUTE)
     save_log(log_fn, log_msgs)
