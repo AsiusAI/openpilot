@@ -41,7 +41,6 @@ from openpilot.system.app.websocketd import (
   authorize_peer,
   load_authorized_peers,
   pack_peer_message,
-  pairing_mode_active,
   pairing_url,
   save_authorized_peers,
   unpack_peer_message,
@@ -51,11 +50,6 @@ from openpilot.system.app.websocketd import (
 
 class ParamsReader(Protocol):
   def get(self, key: str) -> Any: ...
-
-
-def main(exit_event: threading.Event | None = None) -> None:
-  from openpilot.system.app.websocketd import main as websocket_main
-  websocket_main(exit_event)
 
 
 ATHENA_HOST = Params().get("AthenaHost", return_default=True)
@@ -73,8 +67,8 @@ VAMOS_UPDATE_STATE_FILE = Path("/data/vamos-update/state.json")
 SAVE_PARAMS_BLOCKED_KEYS = {
   "AccessToken",
   "ApiCache_Device",
-  "AthenadAuthorizedKeys",
-  "AthenadPairingUntil",
+  "AppAuthorizedKeys",
+  "AppPairingUntil",
   "AthenadUploadQueue",
   "DoUninstall",
   "DongleId",
@@ -1100,7 +1094,7 @@ def live_state_handler(end_event: threading.Event) -> None:
     end_event.wait(LIVE_STATE_INTERVAL_S)
 
 
-def handle_athena_call(sender: str, body: dict) -> None:
+def handle_rpc(sender: str, body: dict) -> None:
   send_peer_payload(sender, json.loads(handle(body, dispatcher)))
 
 
@@ -1123,8 +1117,6 @@ def handle_peer_message(data: str) -> bool:
     if body.get("type") == "pair-request":
       if body.get("publicKey") != sender:
         raise Exception("pair request sender mismatch")
-      if not pairing_mode_active():
-        raise Exception("pairing mode is not active")
       if not verify_pair_token(body.get("pairToken"), dongle_id):
         raise Exception("invalid pair token")
       authorize_peer(body["publicKey"], label=body.get("label") if isinstance(body.get("label"), str) else None)
@@ -1136,16 +1128,13 @@ def handle_peer_message(data: str) -> bool:
       cloudlog.event("athena.websocket.unauthorized", sender=sender, error=True)
       return True
 
-    if body.get("type") == "athena-call":
-      handle_athena_call(sender, body)
-    elif body.get("type") == "event":
+    if body.get("type") == "event":
       if body.get("name") == "terminal":
         terminal_manager.handle(sender, body.get("payload"))
       else:
         cloudlog.event("athena.websocket.event", sender=sender, name=body.get("name"), payload=body.get("payload"))
     elif body.get("method"):
-      body["type"] = "athena-call"
-      handle_athena_call(sender, body)
+      handle_rpc(sender, body)
     return True
   except Exception:
     cloudlog.exception("athena.websocket.handle_peer_message_failed")

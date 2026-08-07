@@ -503,7 +503,7 @@ def main() -> None:
   global AudibleAlert, Ratekeeper, log, messaging, pairing_mode_active
   from openpilot.common.params import Params
   from openpilot.common.realtime import Ratekeeper as OpenpilotRatekeeper
-  from openpilot.system.app.websocketd import pairing_mode_active as app_pairing_mode_active
+  from openpilot.system.app.bluetoothd import pairing_mode_active as app_pairing_mode_active
   try:
     from openpilot.cereal import log as cereal_log, messaging as cereal_messaging
     AudibleAlert = cereal_log.SelfdriveState.AudibleAlert

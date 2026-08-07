@@ -9,9 +9,7 @@ from openpilot.common.params import Params
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.system.app import identity
 from openpilot.system.app.identity import (
-  DONGLE_ID_LEN,
   dongle_id_from_public_key,
-  public_key_from_dongle_id,
 )
 from openpilot.system.app.registration import (
   register,
@@ -37,13 +35,6 @@ class TestRegistration(OpenpilotTestCase):
     self.priv_key.write_bytes(key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
     self.pub_key.write_bytes(key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
     return self.pub_key.read_text()
-
-  def test_public_key_roundtrip(self):
-    public_key = self._generate_keys()
-    dongle = dongle_id_from_public_key(public_key)
-
-    assert len(dongle) == DONGLE_ID_LEN
-    assert public_key_from_dongle_id(dongle) == public_key
 
   def test_valid_cache(self):
     public_key = self._generate_keys()

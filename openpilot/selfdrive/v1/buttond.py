@@ -124,7 +124,7 @@ class PowerButton:
 def main() -> None:
   from openpilot.common.realtime import Ratekeeper
   from openpilot.common.swaglog import cloudlog
-  from openpilot.system.app.websocketd import enable_pairing_mode
+  from openpilot.system.app.bluetoothd import enable_pairing_mode
 
   parser = argparse.ArgumentParser()
   parser.add_argument("--event-device")

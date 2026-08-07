@@ -12,7 +12,7 @@ from openpilot.system.app.tests.test_websocketd import (
 
 
 def test_decrypt_payload_can_skip_wall_clock_validation(monkeypatch):
-  monkeypatch.setattr(websocketd, "identity_private_key", lambda: private_key(RECIPIENT_PRIVATE_KEY))
+  monkeypatch.setattr(websocketd, "get_device_private_key", lambda: private_key(RECIPIENT_PRIVATE_KEY))
   monkeypatch.setattr(websocketd, "wall_time", lambda: 1_800_000_000)
 
   payload = json.dumps(V4_PAYLOAD_FIXTURE)
@@ -22,7 +22,7 @@ def test_decrypt_payload_can_skip_wall_clock_validation(monkeypatch):
 
 
 def test_encrypt_payload_can_use_peer_timestamp(monkeypatch):
-  monkeypatch.setattr(websocketd, "identity_private_key", lambda: private_key(SENDER_PRIVATE_KEY))
+  monkeypatch.setattr(websocketd, "get_device_private_key", lambda: private_key(SENDER_PRIVATE_KEY))
   monkeypatch.setattr(websocketd, "wall_time", lambda: 1_800_000_000)
   monkeypatch.setattr(websocketd.os, "urandom", lambda n: bytes(range(n)))
 

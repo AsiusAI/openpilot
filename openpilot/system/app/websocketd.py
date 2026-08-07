@@ -5,7 +5,6 @@ import random
 import threading
 import time
 from hashlib import sha512
-from pathlib import Path
 
 import jwt
 from cryptography.hazmat.primitives import hashes
@@ -21,11 +20,9 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.system.app.identity import get_device_private_key, identity_to_bytes, is_dongle_id
 
 
-ATHENA_AUTHORIZED_KEYS_PARAM = "AthenadAuthorizedKeys"
-ATHENA_PAIRING_UNTIL_PARAM = "AthenadPairingUntil"
-PARAMS_DIR = Path(os.getenv("PARAMS_DIR", "/data/params/d"))
+APP_AUTHORIZED_KEYS_PARAM = "AppAuthorizedKeys"
 MAX_PAYLOAD_AGE_SECONDS = 60
-PAIRING_MODE_SECONDS = 300
+PAIR_TOKEN_SECONDS = 300
 
 def base64url_encode(data: bytes) -> str:
   return base64.urlsafe_b64encode(data).decode().rstrip("=")
@@ -45,49 +42,9 @@ def payload_timestamp_valid(ts: object, max_age_seconds: int = MAX_PAYLOAD_AGE_S
   return abs(wall_time() - float(ts)) <= max_age_seconds
 
 
-def read_raw_param(key: str) -> str | None:
-  try:
-    return (PARAMS_DIR / key).read_text()
-  except OSError:
-    return None
-
-
-def write_raw_param(key: str, value: str) -> None:
-  PARAMS_DIR.mkdir(parents=True, exist_ok=True)
-  path = PARAMS_DIR / key
-  tmp_path = PARAMS_DIR / f".{key}.tmp"
-  tmp_path.write_text(value)
-  os.replace(tmp_path, path)
-
-
-def remove_raw_param(key: str) -> None:
-  try:
-    (PARAMS_DIR / key).unlink()
-  except FileNotFoundError:
-    pass
-
-
-def enable_pairing_mode(duration_seconds: int = PAIRING_MODE_SECONDS) -> int:
-  pairing_until = int(wall_time()) + duration_seconds
-  write_raw_param(ATHENA_PAIRING_UNTIL_PARAM, str(pairing_until))
-  return pairing_until
-
-
-def disable_pairing_mode() -> None:
-  remove_raw_param(ATHENA_PAIRING_UNTIL_PARAM)
-
-
-def pairing_mode_active() -> bool:
-  try:
-    return int(read_raw_param(ATHENA_PAIRING_UNTIL_PARAM) or "0") >= int(wall_time())
-  except ValueError:
-    return False
-
-
 def load_authorized_peers() -> dict[str, dict[str, str | int]]:
   try:
-    raw = read_raw_param(ATHENA_AUTHORIZED_KEYS_PARAM)
-    raw_peers = json.loads(raw or "{}")
+    raw_peers = Params().get(APP_AUTHORIZED_KEYS_PARAM) or {}
     peers = {}
     for public_key, peer in raw_peers.items():
       if not is_dongle_id(public_key):
@@ -105,7 +62,7 @@ def load_authorized_peers() -> dict[str, dict[str, str | int]]:
 
 
 def save_authorized_peers(peers: dict[str, dict[str, str | int]]) -> None:
-  write_raw_param(ATHENA_AUTHORIZED_KEYS_PARAM, json.dumps(peers))
+  Params().put(APP_AUTHORIZED_KEYS_PARAM, peers, block=True)
 
 
 def authorize_peer(public_key: str, label: str | None = None) -> dict[str, str | int]:
@@ -126,21 +83,16 @@ def stable_json(value) -> str:
   return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def identity_private_key() -> ed25519.Ed25519PrivateKey:
-  return get_device_private_key()
-
-
 def sign_jwt(payload: dict, expiry_seconds: int) -> str:
   now = int(wall_time())
-  return jwt.encode({**payload, "iat": now, "nbf": now, "exp": now + expiry_seconds}, identity_private_key(), algorithm="EdDSA")
+  return jwt.encode({**payload, "iat": now, "nbf": now, "exp": now + expiry_seconds}, get_device_private_key(), algorithm="EdDSA")
 
 
-def pairing_token(recipient: str, expiry_seconds: int = PAIRING_MODE_SECONDS) -> str:
+def pairing_token(recipient: str, expiry_seconds: int = PAIR_TOKEN_SECONDS) -> str:
   return sign_jwt({"type": "pair", "to": recipient}, expiry_seconds)
 
 
 def pairing_url(recipient: str) -> str:
-  enable_pairing_mode()
   return f"https://app.asius.ai/pair#token={pairing_token(recipient)}"
 
 
@@ -153,7 +105,7 @@ def verify_identity_signature(public_key: str, signature: str, data: bytes) -> b
 
 
 def x25519_private_from_identity() -> x25519.X25519PrivateKey:
-  raw = identity_private_key().private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+  raw = get_device_private_key().private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
   digest = bytearray(sha512(raw).digest()[:32])
   digest[0] &= 248
   digest[31] &= 127
@@ -193,7 +145,7 @@ def encrypt_payload(text: str, sender: str, recipient: str, timestamp: int | Non
   aad = stable_json(envelope).encode()
   ciphertext = AESGCM(payload_key(shared, sender, recipient)).encrypt(iv, text.encode(), aad)
   signed = {**envelope, "ciphertext": base64url_encode(ciphertext)}
-  signature = identity_private_key().sign(stable_json(signed).encode())
+  signature = get_device_private_key().sign(stable_json(signed).encode())
   return json.dumps({**signed, "sig": base64url_encode(signature)})
 
 
