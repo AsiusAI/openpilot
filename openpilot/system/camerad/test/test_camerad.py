@@ -17,7 +17,7 @@ EXPOSURE_STABLE_COUNT = 3
 EXPOSURE_RANGE = (0.10, 0.65)
 MAX_TEST_TIME = 25
 STARTUP_FRAME_IGNORE = 10
-MIN_GOOD_FRAME_FRACTION = 0.99
+MAX_ISOLATED_FRAME_DROPS = 2
 
 
 def _numpy_rgb2gray(im):
@@ -70,9 +70,10 @@ def _camera_session():
 
     timestamps = ts[cam]['timestampSof'][STARTUP_FRAME_IGNORE:] / 1e6
     dts = np.abs(np.diff(timestamps) - 1000/SERVICE_LIST[cam].frequency)
-    timing_ok = dts < 1.0
-    assert timing_ok.mean() >= MIN_GOOD_FRAME_FRACTION, \
-      f"{cam} dts(ms) out of spec: max diff {dts.max()}, 99 percentile {np.percentile(dts, 99)}"
+    bad_intervals = np.count_nonzero(dts >= 1.0)
+    assert bad_intervals <= MAX_ISOLATED_FRAME_DROPS, \
+      f"{cam} dts(ms) out of spec: {bad_intervals} bad intervals, " \
+      f"max diff {dts.max()}, 99 percentile {np.percentile(dts, 99)}"
     assert dts.max() < 1000/SERVICE_LIST[cam].frequency + 1.0, f"{cam} dropped consecutive frames"
 
   return ts, exposure
@@ -112,7 +113,8 @@ class TestCamerad(OpenpilotTestCase):
       frame_diffs = np.diff(frame_ids)
       assert frame_diffs.min() == 1, f"{c} has duplicate or decreasing frame IDs"
       assert frame_diffs.max() <= 2, f"{c} dropped consecutive frames"
-      assert np.mean(frame_diffs == 1) >= MIN_GOOD_FRAME_FRACTION, f"{c} dropped too many frames"
+      dropped_frames = np.count_nonzero(frame_diffs != 1)
+      assert dropped_frames <= MAX_ISOLATED_FRAME_DROPS, f"{c} dropped too many frames: {dropped_frames}"
 
   def test_sanity_checks(self):
     self._sanity_checks(self.logs)
