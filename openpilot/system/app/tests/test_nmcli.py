@@ -2,11 +2,11 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from openpilot.system.athena import asius_athenad as athenad
+from openpilot.system.app import methods as athenad
 
 
 class TestNmcli(unittest.TestCase):
-  @patch("openpilot.system.athena.asius_athenad.subprocess.check_output", return_value="connected\n")
+  @patch("openpilot.system.app.methods.subprocess.check_output", return_value="connected\n")
   def test_nmcli_uses_noninteractive_sudo(self, check_output):
     self.assertEqual(athenad._nmcli(["device", "wifi", "connect", "test"]), "connected\n")
     check_output.assert_called_once_with(
@@ -15,7 +15,7 @@ class TestNmcli(unittest.TestCase):
       encoding="utf-8",
     )
 
-  @patch("openpilot.system.athena.asius_athenad.subprocess.check_output")
+  @patch("openpilot.system.app.methods.subprocess.check_output")
   def test_nmcli_redacts_password_but_preserves_error(self, check_output):
     password = "do-not-log-this"
     check_output.side_effect = subprocess.CalledProcessError(10, ["nmcli"], output=f"connection failed for {password}")

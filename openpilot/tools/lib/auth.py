@@ -29,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlencode
 
-from openpilot.tools.lib.api import APIError, API_HOST, CommaApi, UnauthorizedError
+from openpilot.tools.lib.api import APIError, CommaApi, UnauthorizedError
 from openpilot.tools.lib.auth_config import set_token, get_token
 
 class ClientRedirectServer(HTTPServer):
@@ -63,7 +63,7 @@ def auth_redirect_link(method, port):
   }[method]
 
   params = {
-    'redirect_uri': f"{API_HOST}/v2/auth/{provider_id}/redirect/",
+    'redirect_uri': f"https://api.comma.ai/v2/auth/{provider_id}/redirect/",
     'state': f'service,localhost:{port}',
   }
 

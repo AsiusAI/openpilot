@@ -13,6 +13,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"ApiCache_FirehoseStats", {PERSISTENT, JSON}},
     {"AssistNowToken", {PERSISTENT, STRING}},
     {"AthenadPid", {PERSISTENT, INT}},
+    {"BluetoothdPid", {PERSISTENT, INT}},
+    {"WebsocketdPid", {PERSISTENT, INT}},
     {"AthenadAuthorizedKeys", {PERSISTENT, JSON}},
     {"AthenadPairingUntil", {PERSISTENT, INT}},
     {"AthenadUploadQueue", {PERSISTENT, JSON}},

@@ -503,7 +503,7 @@ def main() -> None:
   global AudibleAlert, Ratekeeper, log, messaging, pairing_mode_active
   from openpilot.common.params import Params
   from openpilot.common.realtime import Ratekeeper as OpenpilotRatekeeper
-  from openpilot.system.athena.websocketd import pairing_mode_active as athena_pairing_mode_active
+  from openpilot.system.app.websocketd import pairing_mode_active as app_pairing_mode_active
   try:
     from openpilot.cereal import log as cereal_log, messaging as cereal_messaging
     AudibleAlert = cereal_log.SelfdriveState.AudibleAlert
@@ -513,7 +513,7 @@ def main() -> None:
   Ratekeeper = OpenpilotRatekeeper
   log = cereal_log
   messaging = cereal_messaging
-  pairing_mode_active = athena_pairing_mode_active
+  pairing_mode_active = app_pairing_mode_active
   params = Params()
 
   done = False

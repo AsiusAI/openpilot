@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile
 
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.system.athena import ble_pairing, websocketd
+from openpilot.system.app import ble_pairing, websocketd
 
 
 APP_KEY = "11111111111111111111111111111111111111111111"

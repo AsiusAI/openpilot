@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Asius-specific Athena RPC and live device integration."""
+"""RPC methods shared by the Asius app transports."""
 
 from __future__ import annotations
 
@@ -36,8 +36,8 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware.hw import Paths
 from openpilot.system.athena.rpc import Dispatcher, handle
-from openpilot.system.athena.terminal import TerminalManager
-from openpilot.system.athena.websocketd import (
+from openpilot.system.app.terminal import TerminalManager
+from openpilot.system.app.websocketd import (
   authorize_peer,
   load_authorized_peers,
   pack_peer_message,
@@ -54,7 +54,7 @@ class ParamsReader(Protocol):
 
 
 def main(exit_event: threading.Event | None = None) -> None:
-  from openpilot.system.athena.websocketd import main as websocket_main
+  from openpilot.system.app.websocketd import main as websocket_main
   websocket_main(exit_event)
 
 
@@ -84,6 +84,8 @@ SAVE_PARAMS_BLOCKED_KEYS = {
   "LastAthenaPingTime",
   "SecOCKey",
   "AthenadPid",
+  "BluetoothdPid",
+  "WebsocketdPid",
 }
 LIVE_STATE_SERVICES = [
   "deviceState",
