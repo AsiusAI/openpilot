@@ -186,10 +186,14 @@ const EncoderInfo qcam_encoder_info = {
   INIT_ENCODE_FUNCTIONS(QNarrowRoadEncode),
 };
 
-const LogCameraInfo narrow_road_camera_info{
-  .thread_name = "narrow_road_cam_encoder",
-  .stream_type = VISION_STREAM_NARROW_ROAD,
+const LogCameraInfo road_camera_info{
+  .thread_name = "road_cam_encoder",
+  .stream_type = VISION_STREAM_ROAD,
+#ifdef __VENUS_ENCODER__
+  .encoder_infos = {main_road_encoder_info}
+#else
   .encoder_infos = {main_road_encoder_info, qcam_encoder_info}
+#endif
 };
 
 const LogCameraInfo wide_road_camera_info{

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 
 #include "common/swaglog.h"
@@ -96,8 +97,11 @@ VenusEncoder::VenusEncoder(const EncoderInfo &encoder_info, int in_width,
       camera_stride(in_stride),
       camera_uv_offset(in_uv_offset) {
   valid = initialize();
-  if (!valid)
+  if (!valid) {
     cleanup();
+    LOGE("required Venus encoder initialization failed for %s", encoder_info.publish_name);
+    std::abort();
+  }
 }
 
 VenusEncoder::~VenusEncoder() {
@@ -146,12 +150,12 @@ bool VenusEncoder::set_control(uint32_t id, int32_t value, bool required) {
 
 bool VenusEncoder::initialize() {
   if (access("/dev/kvm", F_OK) != 0) {
-    LOGW("Venus requires EL2; using software encoding because /dev/kvm is unavailable");
+    LOGE("Venus requires EL2; /dev/kvm is unavailable");
     return false;
   }
 
   if (in_width != out_width || in_height != out_height) {
-    LOGW("Venus cannot scale %s (%dx%d input, %dx%d output)",
+    LOGE("Venus scaling is unsupported for %s (%dx%d input, %dx%d output)",
          encoder_info.publish_name, in_width, in_height, out_width, out_height);
     return false;
   }
@@ -572,7 +576,9 @@ void VenusEncoder::dequeue_handler() {
     }
 
     if (poll_fd.revents & (POLLERR | POLLNVAL)) {
-      LOGE("Venus encoder poll error: 0x%x", poll_fd.revents);
+      LOGE("Venus encoder %s poll error: 0x%x", encoder_info.publish_name,
+           poll_fd.revents);
+      std::abort();
     }
   }
 }

@@ -6,10 +6,7 @@
 #include <utility>
 #include <vector>
 
-#if __has_include("media/cam_isp.h") && __has_include("media/cam_sensor.h")
-#include "media/cam_isp.h"
-#include "media/cam_sensor.h"
-#else
+#ifdef __VENUS_ENCODER__
 struct i2c_random_wr_payload {
   uint32_t reg_addr;
   uint32_t reg_data;
@@ -23,6 +20,9 @@ struct i2c_random_wr_payload {
 #define CAM_FORMAT_MIPI_RAW_12 12
 #define CSI_RAW10 0x2b
 #define CSI_RAW12 0x2c
+#else
+#include "media/cam_isp.h"
+#include "media/cam_sensor.h"
 #endif
 
 #include "openpilot/cereal/gen/cpp/log.capnp.h"
