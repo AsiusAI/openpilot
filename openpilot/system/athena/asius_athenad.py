@@ -1035,6 +1035,9 @@ def _live_state_snapshot(sm: messaging.SubMaster, params: Params) -> dict[str, A
     except Exception:
       cloudlog.exception("athena.live_state.service_failed service=%s", service)
 
+  if "deviceState" in services:
+    services["deviceState"]["uptime"] = int(time.monotonic())
+
   param_values = {}
   for key in LIVE_STATE_PARAM_KEYS:
     try:
