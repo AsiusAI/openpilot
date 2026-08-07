@@ -34,8 +34,8 @@ GITHUB = GithubUtils(API_TOKEN, DATA_TOKEN)
 
 EXEC_TIMINGS = [
   # model, instant max, average max
-  ("modelV2", 0.05, 0.033),
-  ("driverStateV2", 0.055, 0.033),
+  ("modelV2", 0.05, 0.028),
+  ("driverStateV2", 0.05, 0.018),
 ]
 
 def get_log_fn(test_route, ref="master"):
@@ -200,7 +200,7 @@ def model_replay(lr, frs):
 
 def get_frames():
   regen_cache = "--regen-cache" in sys.argv
-  frames_cache = '/tmp/model_replay_cache' if PC or V1 else '/data/model_replay_cache'
+  frames_cache = '/tmp/model_replay_cache' if PC else '/data/model_replay_cache'
   os.makedirs(frames_cache, exist_ok=True)
 
   cache_name = f'{frames_cache}/{TEST_ROUTE}_{SEGMENT}_{START_FRAME}_{END_FRAME}.pkl'
