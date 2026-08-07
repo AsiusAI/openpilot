@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from openpilot.system.athena.identity import is_dongle_id
+from openpilot.system.app.identity import is_dongle_id
 from openpilot.system.app.websocketd import authorize_peer, disable_pairing_mode, pairing_mode_active
 
 

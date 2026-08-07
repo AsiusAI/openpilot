@@ -3,7 +3,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat, load_pem_public_key
 
-from openpilot.common.api import get_key_pair
+from openpilot.system.app.api import get_key_pair
 from openpilot.common.hardware.hw import Paths
 
 BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"

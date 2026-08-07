@@ -96,7 +96,7 @@ class SshKeyAction(ItemAction):
 
   def _refresh_state(self):
     self._username = self._params.get("GithubUsername")
-    self._state = SshKeyActionState.REMOVE if self._username else SshKeyActionState.ADD
+    self._state = SshKeyActionState.REMOVE if self._params.get("GithubSshKeys") else SshKeyActionState.ADD
 
   def _update_state(self):
     super()._update_state()
