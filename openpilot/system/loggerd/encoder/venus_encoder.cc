@@ -154,12 +154,6 @@ bool VenusEncoder::initialize() {
     return false;
   }
 
-  if (in_width != out_width || in_height != out_height) {
-    LOGE("Venus scaling is unsupported for %s (%dx%d input, %dx%d output)",
-         encoder_info.publish_name, in_width, in_height, out_width, out_height);
-    return false;
-  }
-
   const std::string path = find_device();
   if (path.empty()) {
     LOGE("Qualcomm Venus encoder device not found");
@@ -211,8 +205,8 @@ bool VenusEncoder::initialize() {
   struct v4l2_selection crop = {};
   crop.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
   crop.target = V4L2_SEL_TGT_CROP;
-  crop.r.width = out_width;
-  crop.r.height = out_height;
+  crop.r.width = in_width;
+  crop.r.height = in_height;
   if (!ioctl_ok(fd, VIDIOC_S_SELECTION, &crop, "VIDIOC_S_SELECTION crop"))
     return false;
 
@@ -328,9 +322,9 @@ bool VenusEncoder::initialize() {
     return false;
   output_streaming = true;
 
-  LOGW("using Venus hardware encoder %s for %s (%dx%d, camera stride/uv %u/%u, "
+  LOGW("using Venus hardware encoder %s for %s (%dx%d to %dx%d, camera stride/uv %u/%u, "
        "input stride/uv %u/%u, %d fps)",
-       path.c_str(), encoder_info.publish_name, out_width, out_height,
+       path.c_str(), encoder_info.publish_name, in_width, in_height, out_width, out_height,
        camera_stride, camera_uv_offset, input_stride, input_uv_offset,
        encoder_info.fps);
   return true;
