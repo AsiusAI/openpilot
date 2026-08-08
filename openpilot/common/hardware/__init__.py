@@ -2,7 +2,7 @@ import os
 from typing import cast
 
 from openpilot.common.hardware.base import HardwareBase
-from openpilot.common.hardware.v1.hardware import Asius
+from openpilot.common.hardware.v1.hardware import HardwareAsius
 from openpilot.common.hardware.comma.hardware import HardwareComma
 from openpilot.common.hardware.pc.hardware import HardwarePc
 
@@ -12,7 +12,7 @@ ASIUS_HARDWARE = os.path.isfile('/ASIUS')
 PC = not (COMMA_HARDWARE or ASIUS_HARDWARE)
 
 if ASIUS_HARDWARE:
-  HARDWARE = cast(HardwareBase, Asius())
+  HARDWARE = cast(HardwareBase, HardwareAsius())
 elif COMMA_HARDWARE:
   HARDWARE = cast(HardwareBase, HardwareComma())
 else:

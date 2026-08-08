@@ -64,7 +64,7 @@ def _raise_thermal_limits() -> None:
         sudo_write(str(trip_overrides[temp]), temp_path)
 
 
-class Asius(HardwareComma):
+class HardwareAsius(HardwareComma):
   @cached_property
   def amplifier(self):
     return None

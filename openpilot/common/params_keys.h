@@ -14,6 +14,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"AssistNowToken", {PERSISTENT, STRING}},
     {"AthenadPid", {PERSISTENT, INT}},
     {"BluetoothdPid", {PERSISTENT, INT}},
+    {"WebsocketHost", {PERSISTENT, STRING, "wss://athena.asius.ai"}},
     {"WebsocketdPid", {PERSISTENT, INT}},
     {"AppAuthorizedKeys", {PERSISTENT, JSON}},
     {"AppPairingUntil", {PERSISTENT, INT}},
@@ -134,7 +135,4 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"UsbGpuActive", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
     {"UsbGpuLoading", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
     {"Version", {PERSISTENT, STRING}},
-
-    // Asius
-    {"AthenaHost", {PERSISTENT, STRING, "wss://athena.asius.ai"}},
 };
