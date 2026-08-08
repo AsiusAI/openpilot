@@ -14,6 +14,7 @@ public:
                int in_stride, int in_uv_offset);
   ~VenusEncoder();
 
+  bool is_valid() const { return valid; }
   int encode_frame(VisionBuf *buf, VisionIpcBufExtra *extra) override;
   void encoder_open() override;
   void encoder_close() override;
