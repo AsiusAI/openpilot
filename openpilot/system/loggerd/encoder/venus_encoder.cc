@@ -99,8 +99,8 @@ VenusEncoder::VenusEncoder(const EncoderInfo &encoder_info, int in_width,
   valid = initialize();
   if (!valid) {
     cleanup();
-    LOGE("required Venus encoder initialization failed for %s", encoder_info.publish_name);
-    std::abort();
+    LOGW("Venus encoder initialization failed for %s; using software fallback",
+         encoder_info.publish_name);
   }
 }
 
