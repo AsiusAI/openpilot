@@ -95,7 +95,7 @@ procs = [
   PythonProcess("dmonitoringmodeld", "openpilot.selfdrive.modeld.dmonitoringmodeld", driverview,
                 enabled=(WEBCAM or not PC) and not NO_DCAM),
   PythonProcess("sensord", "openpilot.system.sensord.sensord", only_onroad, enabled=not PC),
-  PythonProcess("ui", "openpilot.selfdrive.ui.ui", always_run, restart_if_crash=True, enabled=not ASIUS_HARDWARE),
+  PythonProcess("ui", "openpilot.selfdrive.ui.ui", always_run, enabled=not ASIUS_HARDWARE),
   PythonProcess("soundd", "openpilot.selfdrive.ui.soundd", driverview),
   PythonProcess("ledd", "openpilot.selfdrive.v1.ledd", always_run, enabled=ASIUS_HARDWARE),
   PythonProcess("buttond", "openpilot.selfdrive.v1.buttond", always_run, enabled=ASIUS_HARDWARE),
