@@ -153,8 +153,13 @@ const EncoderInfo qcam_encoder_info = {
   .publish_name = "qNarrowRoadEncodeData",
   .filename = "qcamera.ts",
   .include_audio = Params().getBool("RecordAudio"),
+#ifdef __ASIUS_HARDWARE__
+  .frame_width = 672,
+  .frame_height = 380,
+#else
   .frame_width = 526,
   .frame_height = 330,
+#endif
   .get_settings = [](int){return EncoderSettings::QcamEncoderSettings();},
   INIT_ENCODE_FUNCTIONS(QNarrowRoadEncode),
 };
@@ -162,11 +167,7 @@ const EncoderInfo qcam_encoder_info = {
 const LogCameraInfo road_camera_info{
   .thread_name = "road_cam_encoder",
   .stream_type = VISION_STREAM_ROAD,
-#ifdef __ASIUS_HARDWARE__
-  .encoder_infos = {main_road_encoder_info}
-#else
   .encoder_infos = {main_road_encoder_info, qcam_encoder_info}
-#endif
 };
 
 const LogCameraInfo wide_road_camera_info{

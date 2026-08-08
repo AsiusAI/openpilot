@@ -13,7 +13,6 @@
 #ifdef __COMMA_HARDWARE__
 #include "system/loggerd/encoder/v4l_encoder.h"
 #elif defined(__ASIUS_HARDWARE__)
-#include "system/loggerd/encoder/ffmpeg_encoder.h"
 #include "system/loggerd/encoder/venus_encoder.h"
 #else
 #include "system/loggerd/encoder/ffmpeg_encoder.h"
@@ -92,14 +91,8 @@ void encoder_thread(EncoderdState *s, const LogCameraInfo &cam_info) {
 #ifdef __COMMA_HARDWARE__
         auto e = std::make_unique<V4LEncoder>(encoder_info, buf_info.width, buf_info.height);
 #elif defined(__ASIUS_HARDWARE__)
-        std::unique_ptr<VideoEncoder> e;
-        auto venus = std::make_unique<VenusEncoder>(encoder_info, buf_info.width, buf_info.height,
-                                                    buf_info.stride, buf_info.uv_offset);
-        if (venus->is_valid()) e = std::move(venus);
-        if (!e) {
-          LOGW("using FFmpeg encoder fallback for %s", encoder_info.publish_name);
-          e = std::make_unique<FfmpegEncoder>(encoder_info, buf_info.width, buf_info.height);
-        }
+        auto e = std::make_unique<VenusEncoder>(encoder_info, buf_info.width, buf_info.height,
+                                                buf_info.stride, buf_info.uv_offset);
 #else
         auto e = std::make_unique<FfmpegEncoder>(encoder_info, buf_info.width, buf_info.height);
 #endif
