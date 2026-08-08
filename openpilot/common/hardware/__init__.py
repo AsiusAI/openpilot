@@ -2,7 +2,7 @@ import os
 from typing import cast
 
 from openpilot.common.hardware.base import HardwareBase
-from openpilot.common.hardware.v1.hardware import HardwareAsius
+from openpilot.common.hardware.asius.hardware import HardwareAsius
 from openpilot.common.hardware.comma.hardware import HardwareComma
 from openpilot.common.hardware.pc.hardware import HardwarePc
 

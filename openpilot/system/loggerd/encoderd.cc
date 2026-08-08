@@ -71,18 +71,11 @@ void encoder_thread(EncoderdState *s, const LogCameraInfo &cam_info) {
 
   std::vector<std::unique_ptr<VideoEncoder>> encoders;
 
-  const bool live_encoder = !cam_info.encoder_infos.empty() && cam_info.encoder_infos[0].is_live;
-#ifdef __ASIUS_HARDWARE__
-  VisionIpcClient vipc_client = VisionIpcClient("camerad", cam_info.stream_type, live_encoder);
-#else
   VisionIpcClient vipc_client = VisionIpcClient("camerad", cam_info.stream_type, false);
-#endif
 
   std::unique_ptr<JpegEncoder> jpeg_encoder;
 
   int cur_seg = 0;
-  const uint64_t encode_period_ns = 1000000000ULL / cam_info.fps;
-  uint64_t next_encode_time = 0;
   while (!do_exit) {
     if (!vipc_client.connect(false)) {
       util::sleep_for(5);
@@ -136,22 +129,10 @@ void encoder_thread(EncoderdState *s, const LogCameraInfo &cam_info) {
       }
       lagging = false;
 
-      if (!live_encoder && !sync_encoders(s, cam_info.stream_type, extra.frame_id)) {
+      if (!sync_encoders(s, cam_info.stream_type, extra.frame_id)) {
         continue;
       }
       if (do_exit) break;
-
-      if (live_encoder) {
-        if (extra.timestamp_eof + (encode_period_ns / 4) < next_encode_time) {
-          continue;
-        }
-        if (next_encode_time == 0) {
-          next_encode_time = extra.timestamp_eof;
-        }
-        do {
-          next_encode_time += encode_period_ns;
-        } while (next_encode_time <= extra.timestamp_eof);
-      }
 
       // do rotation if required
       const int frames_per_seg = SEGMENT_LENGTH * MAIN_FPS;
@@ -212,7 +193,6 @@ void encoderd_thread(const LogCameraInfo (&cameras)[N]) {
 }
 
 int main(int argc, char* argv[]) {
-  const bool stream_mode = argc > 1 && std::string(argv[1]) == "--stream";
 #ifdef __COMMA_HARDWARE__
   if (argc > 1 && std::string(argv[1]) == "--clip") {
     if (argc < 6) {
@@ -246,24 +226,18 @@ int main(int argc, char* argv[]) {
 #endif
   if (!Hardware::PC()) {
     int ret;
-#ifdef __ASIUS_HARDWARE__
-    // Keep livestream capture ahead of recording's synchronous qcamera encode work.
-    ret = util::set_realtime_priority(stream_mode ? 53 : 52);
-#else
     ret = util::set_realtime_priority(52);
-#endif
     assert(ret == 0);
-#ifdef __ASIUS_HARDWARE__
-    ret = util::set_core_affinity({3, 4, 5});
-#else
     ret = util::set_core_affinity({3});
-#endif
     assert(ret == 0);
   }
-  if (stream_mode) {
-    encoderd_thread(stream_cameras_logged);
-  } else if (argc > 1) {
-    LOGE("Argument '%s' is not supported", argv[1]);
+  if (argc > 1) {
+    std::string arg1(argv[1]);
+    if (arg1 == "--stream") {
+      encoderd_thread(stream_cameras_logged);
+    } else {
+      LOGE("Argument '%s' is not supported", arg1.c_str());
+    }
   } else {
     encoderd_thread(cameras_logged);
   }
