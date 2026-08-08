@@ -5,7 +5,7 @@ from functools import cached_property
 
 from openpilot.common.gpio import get_irqs_for_action
 from openpilot.common.hardware.base import ThermalConfig, ThermalZone
-from openpilot.common.hardware.tici.hardware import Tici
+from openpilot.common.hardware.comma.hardware import HardwareComma
 from openpilot.common.utils import sudo_write
 
 
@@ -64,7 +64,7 @@ def _raise_thermal_limits() -> None:
         sudo_write(str(trip_overrides[temp]), temp_path)
 
 
-class Asius(Tici):
+class Asius(HardwareComma):
   @cached_property
   def amplifier(self):
     return None
