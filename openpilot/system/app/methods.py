@@ -41,7 +41,7 @@ class ParamsReader(Protocol):
   def get(self, key: str) -> Any: ...
 
 
-ATHENA_HOST = Params().get("AthenaHost", return_default=True)
+ATHENA_HOST = Params().get("WebsocketHost", return_default=True)
 
 RECONNECT_TIMEOUT_S = 70
 WS_FRAME_SIZE = 4096
