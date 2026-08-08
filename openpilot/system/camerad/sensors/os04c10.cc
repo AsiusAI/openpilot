@@ -1,7 +1,7 @@
 #include <cmath>
 
 #include "system/camerad/sensors/sensor.h"
-#ifndef __VENUS_ENCODER__
+#ifndef __ASIUS_HARDWARE__
 #include <media/msm_camsensor_sdk.h>
 #endif
 

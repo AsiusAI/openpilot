@@ -5,7 +5,7 @@
 #include "openpilot/cereal/visionstream.h"
 #include "msgq/visionipc/visionipc_server.h"
 
-#ifdef __VENUS_ENCODER__
+#ifdef __ASIUS_HARDWARE__
 #define CAM_ISP_IFE_IN_RES_PHY_0 0
 #define CAM_ISP_IFE_IN_RES_PHY_1 1
 #define CAM_ISP_IFE_IN_RES_PHY_2 2

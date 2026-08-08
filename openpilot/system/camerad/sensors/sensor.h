@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-#ifdef __VENUS_ENCODER__
+#ifdef __ASIUS_HARDWARE__
 struct i2c_random_wr_payload {
   uint32_t reg_addr;
   uint32_t reg_data;

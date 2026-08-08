@@ -4,7 +4,7 @@ import numpy as np
 
 import openpilot.cereal.messaging as messaging
 from msgq.visionipc import VisionIpcClient, VisionStreamType
-from openpilot.common.hardware import V1
+from openpilot.common.hardware import ASIUS_HARDWARE
 from openpilot.common.realtime import DT_MDL
 
 
@@ -19,7 +19,7 @@ def yuv_to_rgb(y, u, v):
   ul = np.repeat(np.repeat(u, 2).reshape(u.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
   vl = np.repeat(np.repeat(v, 2).reshape(v.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
 
-  if V1:
+  if ASIUS_HARDWARE:
     y_full = (y.astype(np.float32) - 16.0) * (255.0 / 219.0)
     u_full = (ul.astype(np.float32) - 128.0) * (255.0 / 224.0)
     v_full = (vl.astype(np.float32) - 128.0) * (255.0 / 224.0)

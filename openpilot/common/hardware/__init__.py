@@ -8,9 +8,7 @@ from openpilot.common.hardware.pc.hardware import HardwarePc
 
 AGNOS = os.path.isfile('/AGNOS')
 COMMA_HARDWARE = AGNOS
-ASIUS = os.path.isfile('/ASIUS')
-ASIUS_HARDWARE = ASIUS
-V1 = ASIUS_HARDWARE
+ASIUS_HARDWARE = os.path.isfile('/ASIUS')
 PC = not (COMMA_HARDWARE or ASIUS_HARDWARE)
 
 if ASIUS_HARDWARE:

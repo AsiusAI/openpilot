@@ -12,7 +12,7 @@ import numpy as np
 from tqdm import trange
 
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.common.hardware import V1
+from openpilot.common.hardware import ASIUS_HARDWARE
 from openpilot.common.params import Params
 from openpilot.common.timeout import Timeout
 from openpilot.system.manager.process_config import managed_processes
@@ -27,7 +27,7 @@ CAMERAS = [
   ("dcamera.hevc", 20, hevc_size, "cabinEncodeIdx"),
   ("ecamera.hevc", 20, hevc_size, "wideRoadEncodeIdx"),
 ]
-if not V1:
+if not ASIUS_HARDWARE:
   CAMERAS.append(("qcamera.ts", 20, lambda x: 130000, None))
 CAMERAD_PROCESS = "camerad"
 ENCODERD_PROCESS = "encoderd"

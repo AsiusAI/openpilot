@@ -4,10 +4,11 @@ import platform
 
 from opendbc.car.structs import car
 from openpilot.common.params import Params
-from openpilot.common.hardware import ASIUS_HARDWARE, PC, COMMA_HARDWARE
+from openpilot.common.hardware import ASIUS_HARDWARE, COMMA_HARDWARE, PC
 from openpilot.system.manager.process import PythonProcess, NativeProcess, DaemonProcess
 
 WEBCAM = os.getenv("USE_WEBCAM") is not None
+NO_DCAM = os.getenv("NO_DCAM") == "1"
 
 def driverview(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started or params.get_bool("IsDriverViewEnabled")
@@ -79,7 +80,7 @@ procs = [
 
   NativeProcess("loggerd", "openpilot/system/loggerd", ["./loggerd"], logging),
   NativeProcess("encoderd", "openpilot/system/loggerd", ["./encoderd"], only_onroad),
-  NativeProcess("stream_encoderd", "openpilot/system/loggerd", ["./encoderd", "--stream"], or_(and_(livestream, not_(iscar)), notcar)),
+  NativeProcess("stream_encoderd", "openpilot/system/loggerd", ["./encoderd", "--stream"], livestream_process),
   PythonProcess("logmessaged", "openpilot.system.logmessaged", always_run),
 
   NativeProcess("camerad", "openpilot/system/camerad", ["./camerad"], or_(driverview, livestream), enabled=not WEBCAM),

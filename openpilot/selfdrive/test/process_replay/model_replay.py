@@ -12,7 +12,7 @@ import numpy as np
 from openpilot.common.utils import tabulate
 
 from openpilot.common.git import get_commit
-from openpilot.common.hardware import PC, V1
+from openpilot.common.hardware import ASIUS_HARDWARE, PC
 from openpilot.tools.lib.openpilotci import get_url
 from openpilot.selfdrive.test.process_replay.compare_logs import compare_logs, format_diff
 from openpilot.selfdrive.test.process_replay.process_replay import get_process_config, replay_process
@@ -257,7 +257,7 @@ if __name__ == "__main__":
         'driverStateV2.modelExecutionTime',
         'driverStateV2.gpuExecutionTime'
       ]
-      if PC or V1:
+      if PC or ASIUS_HARDWARE:
         # TODO We ignore whole bunch so we can compare important stuff
         # like posenet with reasonable tolerance
         ignore += ['modelV2.acceleration.x',
@@ -278,7 +278,7 @@ if __name__ == "__main__":
         for i in range(2):
           for field in ('x', 'y', 'z', 't'):
             ignore.append(f'modelV2.roadEdges.{i}.{field}')
-      tolerance = .3 if PC or V1 else None
+      tolerance = .3 if PC or ASIUS_HARDWARE else None
       results: Any = {TEST_ROUTE: {}}
       log_paths: Any = {TEST_ROUTE: {"models": {'ref': log_fn, 'new': log_fn}}}
       results[TEST_ROUTE]["models"] = compare_logs(cmp_log, log_msgs, tolerance=tolerance, ignore_fields=ignore)
@@ -297,7 +297,7 @@ if __name__ == "__main__":
       failed = True
 
   # upload new refs
-  if update and not (PC or V1):
+  if update and not (PC or ASIUS_HARDWARE):
     print("Uploading new refs")
     log_fn = get_log_fn(TEST_ROUTE)
     save_log(log_fn, log_msgs)
