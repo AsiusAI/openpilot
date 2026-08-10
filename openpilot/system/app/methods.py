@@ -55,6 +55,7 @@ SAVE_PARAMS_BLOCKED_KEYS = {
   "AthenadUploadQueue",
   "DoUninstall",
   "DongleId",
+  "DataUploadState",
   "GithubSshKeys",
   "GithubUsername",
   "HardwareSerial",
@@ -74,6 +75,9 @@ LIVE_STATE_SERVICES = [
 ]
 LIVE_STATE_PARAM_KEYS = [
   "DongleId",
+  "DataApiHost",
+  "DataUploadEnabled",
+  "ShareDrivingData",
   "HardwareSerial",
   "LastAthenaPingTime",
   "OpenpilotEnabledToggle",

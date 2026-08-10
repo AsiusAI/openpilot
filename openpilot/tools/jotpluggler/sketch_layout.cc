@@ -294,13 +294,13 @@ void add_log_file_to_segments(std::map<int, SegmentLogs> *segments, int segment_
     segment.rlog = file;
   } else if (name == "qlog.bz2" || name == "qlog.zst" || name == "qlog") {
     segment.qlog = file;
-  } else if (name == "fcamera.hevc") {
+  } else if (name == "fcamera.mp4" || name == "fcamera.hevc") {
     segment.fcamera = file;
-  } else if (name == "dcamera.hevc") {
+  } else if (name == "dcamera.mp4" || name == "dcamera.hevc") {
     segment.dcamera = file;
-  } else if (name == "ecamera.hevc") {
+  } else if (name == "ecamera.mp4" || name == "ecamera.hevc") {
     segment.ecamera = file;
-  } else if (name == "qcamera.ts") {
+  } else if (name == "qcamera.mp4" || name == "qcamera.ts") {
     segment.qcamera = file;
   }
 }

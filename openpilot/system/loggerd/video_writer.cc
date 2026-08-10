@@ -5,7 +5,7 @@
 #include "common/util.h"
 
 VideoWriter::VideoWriter(const char *path, const char *filename, bool remuxing, int width, int height, int fps, cereal::EncodeIndex::Type codec)
-  : remuxing(remuxing) {
+  : fps(fps), remuxing(remuxing) {
   vid_path = util::string_format("%s/%s", path, filename);
   lock_path = util::string_format("%s/%s.lock", path, filename);
 
@@ -16,16 +16,19 @@ VideoWriter::VideoWriter(const char *path, const char *filename, bool remuxing, 
   LOGD("encoder_open %s remuxing:%d", this->vid_path.c_str(), this->remuxing);
   if (this->remuxing) {
     bool raw = (codec == cereal::EncodeIndex::Type::BIG_BOX_LOSSLESS);
+    this->fragmented_mp4 = !raw;
     avformat_alloc_output_context2(&this->ofmt_ctx, NULL, raw ? "matroska" : NULL, this->vid_path.c_str());
     assert(this->ofmt_ctx);
 
-    // set codec correctly. needed?
-    assert(codec != cereal::EncodeIndex::Type::FULL_H_E_V_C);
-    const AVCodec *avcodec = avcodec_find_encoder(raw ? AV_CODEC_ID_FFVHUFF : AV_CODEC_ID_H264);
-    assert(avcodec);
+    const AVCodecID codec_id = raw ? AV_CODEC_ID_FFVHUFF :
+                               codec == cereal::EncodeIndex::Type::FULL_H_E_V_C ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
+    const AVCodec *avcodec = raw ? avcodec_find_encoder(codec_id) : nullptr;
+    assert(!raw || avcodec);
 
     this->codec_ctx = avcodec_alloc_context3(avcodec);
     assert(this->codec_ctx);
+    this->codec_ctx->codec_id = codec_id;
+    this->codec_ctx->codec_type = AVMEDIA_TYPE_VIDEO;
     this->codec_ctx->width = width;
     this->codec_ctx->height = height;
     this->codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
@@ -102,6 +105,7 @@ void VideoWriter::write(uint8_t *data, int len, long long timestamp, bool codecc
   }
 
   if (remuxing) {
+    if (first_video_timestamp == AV_NOPTS_VALUE) first_video_timestamp = timestamp;
     if (codecconfig) {
       if (len > 0) {
         codec_ctx->extradata = (uint8_t*)av_mallocz(len + AV_INPUT_BUFFER_PADDING_SIZE);
@@ -112,23 +116,23 @@ void VideoWriter::write(uint8_t *data, int len, long long timestamp, bool codecc
       assert(err >= 0);
       // if there is an audio stream, it must be initialized before this point
       AVDictionary *options = nullptr;
-      if (ofmt_ctx->metadata) av_dict_set(&options, "movflags", "+faststart+use_metadata_tags", 0);
+      if (fragmented_mp4) {
+        av_dict_set(&options, "movflags", "+frag_keyframe+empty_moov+default_base_moof+skip_sidx+use_metadata_tags", 0);
+        av_dict_set(&options, "min_frag_duration", "2000000", 0);
+      }
       err = avformat_write_header(ofmt_ctx, &options);
       av_dict_free(&options);
       assert(err >= 0);
       header_written = true;
     } else {
-      // input timestamps are in microseconds
-      AVRational in_timebase = {1, 1000000};
-
       AVPacket pkt = {};
       pkt.data = data;
       pkt.size = len;
       pkt.stream_index = this->out_stream->index;
 
-      enum AVRounding rnd = static_cast<enum AVRounding>(AV_ROUND_NEAR_INF|AV_ROUND_PASS_MINMAX);
-      pkt.pts = pkt.dts = av_rescale_q_rnd(timestamp, in_timebase, ofmt_ctx->streams[0]->time_base, rnd);
-      pkt.duration = av_rescale_q(50*1000, in_timebase, ofmt_ctx->streams[0]->time_base);
+      pkt.duration = av_rescale_q(1, AVRational{1, fps}, out_stream->time_base);
+      pkt.pts = pkt.dts = next_video_pts;
+      next_video_pts += pkt.duration;
 
       if (keyframe) {
         pkt.flags |= AV_PKT_FLAG_KEY;
@@ -136,9 +140,10 @@ void VideoWriter::write(uint8_t *data, int len, long long timestamp, bool codecc
 
       // TODO: can use av_write_frame for non raw?
       int err = av_interleaved_write_frame(ofmt_ctx, &pkt);
-      if (err < 0) { LOGW("ts encoder write issue len: %d ts: %lld", len, timestamp); }
+      if (err < 0) { LOGW("video writer packet issue len: %d ts: %lld", len, timestamp); }
 
       av_packet_unref(&pkt);
+      write_buffered_audio();
     }
   }
 }
@@ -150,10 +155,7 @@ void VideoWriter::write_audio(uint8_t *data, int len, long long timestamp, int s
     audio_initialized = true;
   }
   if (!audio_codec_ctx) return;
-  // sync logMonoTime of first audio packet with the timestampEof of first video packet
-  if (audio_pts == 0) {
-    audio_pts = (timestamp * audio_codec_ctx->sample_rate) / 1000000ULL;
-  }
+  if (first_audio_timestamp == AV_NOPTS_VALUE) first_audio_timestamp = timestamp;
 
   // convert s16le samples to fltp and add to buffer
   const int16_t *raw_samples = reinterpret_cast<const int16_t*>(data);
@@ -165,7 +167,11 @@ void VideoWriter::write_audio(uint8_t *data, int len, long long timestamp, int s
     size_t samples_to_drop = (audio_buffer.size() + sample_count) - max_buffer_size;
     LOGE("Audio buffer overflow, dropping %zu oldest samples", samples_to_drop);
     audio_buffer.erase(audio_buffer.begin(), audio_buffer.begin() + samples_to_drop);
-    audio_pts += samples_to_drop;
+    if (audio_pts == AV_NOPTS_VALUE) {
+      first_audio_timestamp += av_rescale_q(samples_to_drop, audio_codec_ctx->time_base, AVRational{1, 1000000});
+    } else {
+      audio_pts += samples_to_drop;
+    }
   }
 
   // Add new samples to the buffer
@@ -174,7 +180,19 @@ void VideoWriter::write_audio(uint8_t *data, int len, long long timestamp, int s
   std::transform(raw_samples, raw_samples + sample_count, audio_buffer.begin() + original_size,
                 [](int16_t sample) { return sample * normalizer; });
 
-  if (!header_written) return; // header not written yet, process audio frame after header is written
+  write_buffered_audio();
+}
+
+void VideoWriter::write_buffered_audio() {
+  if (!header_written || first_video_timestamp == AV_NOPTS_VALUE || first_audio_timestamp == AV_NOPTS_VALUE) return;
+  if (audio_pts == AV_NOPTS_VALUE) {
+    int64_t offset = first_audio_timestamp - first_video_timestamp;
+    if (offset < -10 * 1000000LL || offset > 10 * 1000000LL) {
+      LOGW("audio and video clocks differ by %lld us; starting audio at zero", (long long)offset);
+      offset = 0;
+    }
+    audio_pts = av_rescale_q(offset, AVRational{1, 1000000}, audio_codec_ctx->time_base);
+  }
   while (audio_buffer.size() >= audio_codec_ctx->frame_size) {
     audio_frame->pts = audio_pts;
     float *f_samples = reinterpret_cast<float*>(audio_frame->data[0]);
@@ -207,8 +225,9 @@ void VideoWriter::encode_and_write_audio_frame(AVFrame* frame) {
 }
 
 void VideoWriter::process_remaining_audio() {
+  write_buffered_audio();
   // Process remaining audio samples by padding with silence
-  if (audio_buffer.size() > 0 && audio_buffer.size() < audio_codec_ctx->frame_size) {
+  if (audio_pts != AV_NOPTS_VALUE && audio_buffer.size() > 0 && audio_buffer.size() < audio_codec_ctx->frame_size) {
     audio_buffer.resize(audio_codec_ctx->frame_size, 0.0f);
 
     // Encode final frame
@@ -227,11 +246,11 @@ VideoWriter::~VideoWriter() {
       avcodec_free_context(&this->audio_codec_ctx);
     }
     int err = av_write_trailer(this->ofmt_ctx);
-    if (err != 0) LOGE("av_write_trailer failed %d", err);
+    if (err < 0) LOGE("av_write_trailer failed %d", err);
     avcodec_free_context(&this->codec_ctx);
     if (this->audio_frame) av_frame_free(&this->audio_frame);
     err = avio_closep(&this->ofmt_ctx->pb);
-    if (err != 0) LOGE("avio_closep failed %d", err);
+    if (err < 0) LOGE("avio_closep failed %d", err);
     avformat_free_context(this->ofmt_ctx);
   } else {
     util::safe_fflush(this->of);

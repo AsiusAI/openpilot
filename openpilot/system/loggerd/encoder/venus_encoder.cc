@@ -528,12 +528,16 @@ void VenusEncoder::dequeue_handler() {
           const bool data_has_header =
               !codec_header.empty() && data_size >= codec_header.size() &&
               memcmp(data, codec_header.data(), codec_header.size()) == 0;
-          if ((flags & V4L2_BUF_FLAG_KEYFRAME) &&
-              !codec_header.empty() && !data_has_header)
+          if ((flags & V4L2_BUF_FLAG_KEYFRAME) && !codec_header.empty())
             header = kj::arrayPtr(codec_header.data(), codec_header.size());
+          size_t payload_size = data_size;
+          if (data_has_header) {
+            payload_size -= codec_header.size();
+            memmove(data, data + codec_header.size(), payload_size);
+          }
           publisher_publish(
               segment_num, index++, extra, flags, header,
-              kj::arrayPtr(data, data_size));
+              kj::arrayPtr(data, payload_size));
         }
         if (outstanding.load() > 0)
           outstanding.fetch_sub(1);
