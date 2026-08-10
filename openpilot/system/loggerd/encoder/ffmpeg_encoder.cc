@@ -56,6 +56,7 @@ void FfmpegEncoder::encoder_open() {
   this->codec_ctx->height = frame->height;
   this->codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
   this->codec_ctx->time_base = (AVRational){ 1, encoder_info.fps };
+  if (codec_id == AV_CODEC_ID_H264) this->codec_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
   int err = avcodec_open2(this->codec_ctx, codec, NULL);
   assert(err >= 0);
 
@@ -144,10 +145,12 @@ int FfmpegEncoder::encode_frame(VisionBuf* buf, VisionIpcBufExtra *extra) {
       printf("%20s got %8d bytes flags %8x idx %4d id %8d\n", encoder_info.publish_name, pkt.size, pkt.flags, counter, extra->frame_id);
     }
 
+    auto header = (pkt.flags & AV_PKT_FLAG_KEY) && codec_ctx->extradata_size > 0
+                    ? kj::arrayPtr<capnp::byte>(codec_ctx->extradata, codec_ctx->extradata_size)
+                    : kj::arrayPtr<capnp::byte>(pkt.data, (size_t)0);
     publisher_publish(segment_num, counter, *extra,
-      (pkt.flags & AV_PKT_FLAG_KEY) ? V4L2_BUF_FLAG_KEYFRAME : 0,
-      kj::arrayPtr<capnp::byte>(pkt.data, (size_t)0), // TODO: get the header
-      kj::arrayPtr<capnp::byte>(pkt.data, pkt.size));
+                      (pkt.flags & AV_PKT_FLAG_KEY) ? V4L2_BUF_FLAG_KEYFRAME : 0,
+                      header, kj::arrayPtr<capnp::byte>(pkt.data, pkt.size));
 
     counter++;
   }

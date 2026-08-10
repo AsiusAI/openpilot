@@ -98,21 +98,21 @@ public:
 const EncoderInfo main_road_encoder_info = {
   .publish_name = "narrowRoadEncodeData",
   .thumbnail_name = "thumbnail",
-  .filename = "fcamera.hevc",
+  .filename = Hardware::PC() ? "fcamera.mkv" : "fcamera.mp4",
   .get_settings = [](int in_width){return EncoderSettings::MainEncoderSettings(in_width);},
   INIT_ENCODE_FUNCTIONS(NarrowRoadEncode),
 };
 
 const EncoderInfo main_wide_road_encoder_info = {
   .publish_name = "wideRoadEncodeData",
-  .filename = "ecamera.hevc",
+  .filename = Hardware::PC() ? "ecamera.mkv" : "ecamera.mp4",
   .get_settings = [](int in_width){return EncoderSettings::MainEncoderSettings(in_width);},
   INIT_ENCODE_FUNCTIONS(WideRoadEncode),
 };
 
-const EncoderInfo main_cabin_encoder_info = {
-  .publish_name = "cabinEncodeData",
-  .filename = "dcamera.hevc",
+const EncoderInfo main_driver_encoder_info = {
+  .publish_name = "driverEncodeData",
+  .filename = Hardware::PC() ? "dcamera.mkv" : "dcamera.mp4",
   .record = Params().getBool("RecordFront"),
   .get_settings = [](int in_width){return EncoderSettings::MainEncoderSettings(in_width);},
   INIT_ENCODE_FUNCTIONS(CabinEncode),
@@ -150,8 +150,8 @@ const EncoderInfo stream_cabin_encoder_info = {
 };
 
 const EncoderInfo qcam_encoder_info = {
-  .publish_name = "qNarrowRoadEncodeData",
-  .filename = "qcamera.ts",
+  .publish_name = "qRoadEncodeData",
+  .filename = "qcamera.mp4",
   .include_audio = Params().getBool("RecordAudio"),
 #ifdef __ASIUS_HARDWARE__
   .frame_width = 672,
