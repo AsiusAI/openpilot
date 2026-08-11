@@ -18,6 +18,7 @@ from opendbc.car.car_helpers import get_demo_car_params
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.common.filter_simple import FirstOrderFilter
+from openpilot.common.hardware import ASIUS_HARDWARE
 from openpilot.common.realtime import config_realtime_process, DT_MDL
 from openpilot.common.transformations.camera import DEVICE_CAMERAS
 from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
@@ -29,7 +30,8 @@ from openpilot.selfdrive.modeld.compile_modeld import make_input_queues, WARP_IN
 from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_driving_model_data, fill_pose_msg, PublishState
 from openpilot.common.file_chunker import open_file_chunked
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
-from openpilot.selfdrive.modeld.helpers import usbgpu_present, usbgpu_compiled, modeld_pkl_path, get_tg_input_devices, load_oob, tensor_from_dma_buf
+from openpilot.selfdrive.modeld.helpers import MODELS_DIR, usbgpu_present, usbgpu_compiled, modeld_pkl_path, get_tg_input_devices, load_oob, tensor_from_dma_buf
+from openpilot.selfdrive.modeld.qnn_runner import NumpyFramePreprocessor, QnnModelRunner, default_qnn_model_path
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.modeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
@@ -38,6 +40,7 @@ LAT_SMOOTH_SECONDS = 0.0
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
 BIG_MODEL_TIMEOUT = 60
+MODEL_INPUTS_DUMP_DIR = os.getenv('MODEL_INPUTS_DUMP_DIR')
 
 
 def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.ModelDataV2.Action,
@@ -138,13 +141,48 @@ class ModelState:
     self.usbgpu = usbgpu
 
     self.frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
+    default_backend = input_devices.get('MODEL_BACKEND', 'qnn' if ASIUS_HARDWARE else ('onnx' if 'MODEL_ONNX_PATH' in os.environ else 'tinygrad'))
+    self.backend = os.getenv('MODEL_BACKEND', default_backend).lower()
+    if self.backend not in ('qnn', 'onnx', 'tinygrad'):
+      raise ValueError(f'unsupported MODEL_BACKEND={self.backend!r}')
+    qnn_model_path = default_qnn_model_path(MODELS_DIR) if self.backend in ('qnn', 'onnx') else None
+    if self.backend == 'qnn' and qnn_model_path is None:
+      raise RuntimeError('QNN modeld requires driving_supercombo_qnn.onnx')
+    self.qnn_runner = QnnModelRunner(qnn_model_path, self.input_shapes, self.frame_skip, self.backend == 'qnn') if qnn_model_path else None
+    use_numpy_warp = self.qnn_runner is not None and bool(int(os.getenv('MODEL_NUMPY_WARP', '0')))
+    if use_numpy_warp:
+      self.WARP_DEV = self.QUEUE_DEV = 'CPU'
     self.input_queues, self.npy = make_input_queues(self.input_shapes, self.frame_skip, device=self.QUEUE_DEV)
-    self.full_frames: dict[str, Tensor] = {}
+    self.full_frames: dict[str, Tensor | np.ndarray] = {}
     self._blob_cache: dict[tuple[str, int, int | None], Tensor] = {}
     self.parser = Parser()
     self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in ('img', 'big_img')}
-    self.run_policy = jits['run_policy']
-    self.warp = jits[(cam_w,cam_h)]
+    img_shape = self.input_shapes['img']
+    self.numpy_warp = NumpyFramePreprocessor(cam_w, cam_h, self.frame_buf_params['img'], img_shape[2], img_shape[3]) if use_numpy_warp else None
+    self.warp = None if self.numpy_warp else jits[(cam_w,cam_h)]
+    self.run_policy = None if self.qnn_runner else jits['run_policy']
+    self.model_inputs_dump_count = 0
+    if MODEL_INPUTS_DUMP_DIR:
+      os.makedirs(MODEL_INPUTS_DUMP_DIR, exist_ok=True)
+
+  def dump_model_inputs(self) -> None:
+    if not MODEL_INPUTS_DUMP_DIR:
+      return
+
+    img_q = self.input_queues['img_q'].numpy()
+    big_img_q = self.input_queues['big_img_q'].numpy()
+    feat_q = self.input_queues['feat_q'].numpy()
+    desire_q = self.input_queues['desire_q'].numpy()
+    model_inputs = {
+      'img': img_q[::self.frame_skip].reshape(1, -1, *img_q.shape[2:]),
+      'big_img': big_img_q[::self.frame_skip].reshape(1, -1, *big_img_q.shape[2:]),
+      'features_buffer': feat_q[::self.frame_skip].reshape(1, -1, feat_q.shape[-1]),
+      'desire_pulse': desire_q.reshape(-1, self.frame_skip, *desire_q.shape[1:]).max(1).reshape(1, -1, desire_q.shape[-1]),
+      'traffic_convention': self.npy['traffic_convention'].copy(),
+      'action_t': self.npy['action_t'].copy(),
+    }
+    np.savez(os.path.join(MODEL_INPUTS_DUMP_DIR, f'{self.model_inputs_dump_count:06d}.npz'), **model_inputs)
+    self.model_inputs_dump_count += 1
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
@@ -156,6 +194,9 @@ class ModelState:
       ptr = np.frombuffer(bufs[key].data, dtype=np.uint8).ctypes.data
       fd = getattr(bufs[key], 'fd', None)
       yuv_size = self.frame_buf_params[key][3]
+      if self.numpy_warp:
+        self.full_frames[key] = np.frombuffer(bufs[key].data, dtype=np.uint8, count=yuv_size)
+        continue
       # There is a ringbuffer of imgs, just cache tensors pointing to all of them
       cache_key = (key, ptr, fd)
       if cache_key not in self._blob_cache:
@@ -171,12 +212,21 @@ class ModelState:
     self.npy['tfm'][:,:] = transforms['img'][:,:]
     self.npy['big_tfm'][:,:] = transforms['big_img'][:,:]
 
-    warped = self.warp(**{k: self.input_queues[k] for k in WARP_INPUTS}, frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
+    if self.numpy_warp:
+      warped = self.numpy_warp.run(self.full_frames, transforms)
+    else:
+      assert self.warp is not None
+      warped = self.warp(**{k: self.input_queues[k] for k in WARP_INPUTS}, frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
 
-    outs, = self.run_policy(
-      **{k: self.input_queues[k] for k in POLICY_INPUTS if k in self.input_queues}, warped=warped
-    )
-    model_output = outs.numpy()[0]
+    if self.qnn_runner:
+      model_output = self.qnn_runner.run(warped, self.npy)
+    else:
+      assert self.run_policy is not None
+      outs, = self.run_policy(
+        **{k: self.input_queues[k] for k in POLICY_INPUTS if k in self.input_queues}, warped=warped
+      )
+      self.dump_model_inputs()
+      model_output = outs.numpy()[0]
     if self.usbgpu and not np.all(np.isfinite(model_output)):
       # TODO remove with prev_feat
       cloudlog.error("model output not finite, dropping frame")
@@ -194,6 +244,8 @@ class ModelState:
     dims = {'desire_pulse': ModelConstants.DESIRE_LEN, 'traffic_convention': 2, 'action_t': 2}
     self.run(dummy_frames, dict.fromkeys(self.vision_input_names, eye), {k: np.zeros(v, dtype=np.float32) for k, v in dims.items()})
     self.input_queues, self.npy = make_input_queues(self.input_shapes, self.frame_skip, device=self.QUEUE_DEV)
+    if self.qnn_runner:
+      self.qnn_runner.reset()
     self.prev_desire[:] = 0
     self.full_frames.clear()
     self._blob_cache.clear()

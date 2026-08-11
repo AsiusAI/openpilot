@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import pickle
 import shutil
 import struct
@@ -17,8 +18,13 @@ TG_INPUT_DEVICES_PATH = MODELS_DIR / 'tg_input_devices.json'
 
 
 def tensor_from_dma_buf(ptr: int, fd: int | None, size: int, device: str) -> Tensor:
-  if fd is None or device.split(':', 1)[0] != 'QCOM':
+  if device.split(':', 1)[0] != 'QCOM':
     return Tensor.from_blob(ptr, (size,), dtype='uint8', device=device)
+  if fd is None:
+    # ModelState.warmup uses numpy-backed dummy frames. MSM DRM cannot import a
+    # bare userspace pointer, so copy those through CPU; live VisionBuf frames
+    # take the zero-copy DMA-BUF path below.
+    return Tensor.from_blob(ptr, (size,), dtype='uint8', device='CPU').to(device)
   tensor = Tensor.empty(size, dtype='uint8', device=device)
   buffer = cast(Buffer, tensor.uop.buffer)
   buffer.allocate(Device[device].iface.map(ptr, buffer.nbytes, fd), external_ptr=ptr)
@@ -27,9 +33,14 @@ def tensor_from_dma_buf(ptr: int, fd: int | None, size: int, device: str) -> Ten
 
 def get_tg_input_devices(process_name: str, usbgpu: bool):
   with open(TG_INPUT_DEVICES_PATH) as f:
-    return json.load(f)[process_name]['default' if not usbgpu else 'usbgpu']
+    devices = json.load(f)[process_name]['default' if not usbgpu else 'usbgpu']
+  if process_name == 'openpilot.selfdrive.modeld.modeld' and not usbgpu and (device := os.getenv('MODEL_TINYGRAD_DEVICE')):
+    devices.update({'WARP_DEV': device, 'QUEUE_DEV': device})
+  return devices
 
 def modeld_pkl_path(usbgpu: bool):
+  if not usbgpu and (configured := os.getenv('MODEL_TINYGRAD_PATH')):
+    return Path(configured)
   prefix = 'big_' if usbgpu else ''
   return MODELS_DIR / f'{prefix}driving_tinygrad.pkl'
 
