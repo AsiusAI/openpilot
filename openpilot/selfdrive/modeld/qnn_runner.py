@@ -80,8 +80,8 @@ class QnnModelRunner:
     else:
       providers = ['CPUExecutionProvider']
 
-    # Keep fork-specific models out of comma's shared LFS store. Like the
-    # tinygrad artifacts, a model may be committed as <=45 MiB Git chunks.
+    # Normal checkouts provide the model through the Asius LFS endpoint. Keep
+    # chunk support for local/generated models used during quantization work.
     model_source: str | bytes = model_path
     if not Path(model_path).is_file():
       with open_file_chunked(model_path) as model_stream:
