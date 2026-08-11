@@ -76,6 +76,18 @@ class HardwareAsius(HardwareComma):
     with open("/sys/devices/soc0/serial_number") as serial_file:
       return serial_file.read().strip()
 
+  # Asius v1 is screenless. Reporting a synthetic backlight level keeps
+  # hardwared out of power save, so display operations must remain no-ops and
+  # the published brightness must always be zero.
+  def set_display_power(self, on):
+    pass
+
+  def set_screen_brightness(self, percentage):
+    pass
+
+  def get_screen_brightness(self):
+    return 0
+
   def get_thermal_config(self):
     return ThermalConfig(cpu=[ThermalZone(f"cpu{i}-thermal") for i in range(8)],
                          gpu=[ThermalZone("gpuss0-thermal"), ThermalZone("gpuss1-thermal")],

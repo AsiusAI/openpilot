@@ -280,11 +280,10 @@ if __name__ == "__main__":
             ignore.append(f'modelV2.roadEdges.{i}.{field}')
       selected_backend = os.getenv("MODEL_BACKEND", get_tg_input_devices("openpilot.selfdrive.modeld.modeld", False).get("MODEL_BACKEND", ""))
       qnn_replay = selected_backend.lower() == "qnn" or os.path.basename(os.getenv("MODEL_ONNX_PATH", "")) == "driving_supercombo_qnn.onnx"
-      if qnn_replay and not bool(int(os.getenv("MODEL_QNN_STRICT_REPLAY", "0"))):
-        # Quantization shifts the uncertainty calibration around class/threshold boundaries.
-        # Keep action, pose, and all other model outputs under the normal replay comparison.
-        ignore += ['modelV2.confidence', 'modelV2.laneLineStds', 'modelV2.roadEdgeStds']
-      tolerance = .3 if PC or ASIUS_HARDWARE else None
+      # MSM is already within 0.1 of the reference on the Dragon replay. Keep
+      # QNN at that same threshold so quantization or HTP drift cannot hide
+      # behind the looser cross-hardware tolerance.
+      tolerance = .1 if qnn_replay else (.3 if PC or ASIUS_HARDWARE else None)
       results: Any = {TEST_ROUTE: {}}
       log_paths: Any = {TEST_ROUTE: {"models": {'ref': log_fn, 'new': log_fn}}}
       results[TEST_ROUTE]["models"] = compare_logs(cmp_log, log_msgs, tolerance=tolerance, ignore_fields=ignore)

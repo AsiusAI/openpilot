@@ -35,7 +35,9 @@ else:
   tg_flags = f'DEV=CPU' if arch == 'Darwin' else 'DEV=CPU:LLVM'
 # QNN runs the driving policy on HTP; QCOM runs the whole tinygrad model on MSM.
 # MODELD_DEV is the single build-time switch between the two Asius configurations.
-modeld_dev = os.getenv('MODELD_DEV', 'QNN' if ASIUS_HARDWARE else tg_backend).upper()
+# Keep the validated MSM backend as the default. QNN remains an explicit build
+# choice until its HTP replay matches MSM closely enough for a car test.
+modeld_dev = os.getenv('MODELD_DEV', tg_backend).upper()
 if modeld_dev not in ('QNN', tg_backend):
   raise ValueError(f'MODELD_DEV must be QNN or {tg_backend}, got {modeld_dev!r}')
 modeld_tg_backend = tg_backend if modeld_dev == 'QNN' else modeld_dev
