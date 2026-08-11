@@ -2,7 +2,26 @@
 import argparse
 import math
 import os
+import re
 import subprocess
+from pathlib import Path
+
+
+CHUNK_RE = re.compile(r"^(?P<base>.+)\.chunk(?P<index>\d{2})of(?P<count>\d{2})$")
+MAX_CHUNK_SIZE = 45 * 1024 * 1024
+
+
+def valid_chunk(filename: str) -> bool:
+  match = CHUNK_RE.match(filename)
+  if match is None or os.path.getsize(filename) > MAX_CHUNK_SIZE:
+    return False
+
+  manifest = Path(f"{match['base']}.chunkmanifest")
+  try:
+    count = int(manifest.read_text().strip())
+  except (FileNotFoundError, ValueError):
+    return False
+  return count == int(match['count']) and 1 <= int(match['index']) <= count
 
 
 def lfs_files(filenames: list[str]) -> set[str]:
@@ -24,7 +43,7 @@ def check_added_large_files(filenames: list[str], max_kb: int) -> int:
   failed = False
   ignored = lfs_files(filenames)
   for filename in filenames:
-    if filename in ignored:
+    if filename in ignored or valid_chunk(filename):
       continue
 
     size_kb = math.ceil(os.stat(filename).st_size / 1024)
