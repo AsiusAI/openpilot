@@ -20,7 +20,11 @@ uv run --with onnx==1.22.0 --with onnxruntime==1.28.0 python openpilot/selfdrive
   --source openpilot/selfdrive/modeld/models/driving_supercombo.onnx \
   --calibration-dir /path/to/modeld-inputs \
   --output openpilot/selfdrive/modeld/models/driving_supercombo_qnn.onnx
+python openpilot/common/file_chunker.py openpilot/selfdrive/modeld/models/driving_supercombo_qnn.onnx
 ```
+
+Commit the generated chunk and manifest. This fork-specific model is kept out
+of comma's shared LFS store; the runner transparently loads the chunked model.
 
 Set `MODEL_INPUTS_DUMP_DIR` while running the regular tinygrad model to capture calibration inputs.
 For host replay, set `MODEL_BACKEND=onnx` and `MODEL_ONNX_PATH`; the `onnx` backend uses ONNX Runtime's CPU provider.

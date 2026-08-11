@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import numpy as np
+from openpilot.common.file_chunker import get_manifest_path, open_file_chunked
 
 
 class NumpyFramePreprocessor:
@@ -79,7 +80,13 @@ class QnnModelRunner:
     else:
       providers = ['CPUExecutionProvider']
 
-    self.session = ort.InferenceSession(model_path, sess_options=options, providers=providers)
+    # Keep fork-specific models out of comma's shared LFS store. Like the
+    # tinygrad artifacts, a model may be committed as <=45 MiB Git chunks.
+    model_source: str | bytes = model_path
+    if not Path(model_path).is_file():
+      with open_file_chunked(model_path) as model_stream:
+        model_source = model_stream.read()
+    self.session = ort.InferenceSession(model_source, sess_options=options, providers=providers)
     if use_qnn and self.session.get_providers()[0] != 'QNNExecutionProvider':
       raise RuntimeError(f'QNN execution provider failed to load: {self.session.get_providers()}')
     self.frame_skip = frame_skip
@@ -124,4 +131,4 @@ def default_qnn_model_path(models_dir: Path) -> str | None:
   if configured:
     return configured
   path = models_dir / 'driving_supercombo_qnn.onnx'
-  return str(path) if path.is_file() else None
+  return str(path) if path.is_file() or Path(get_manifest_path(path)).is_file() else None
