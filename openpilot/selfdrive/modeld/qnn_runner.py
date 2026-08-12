@@ -62,8 +62,12 @@ class QnnModelRunner:
     if use_qnn:
       if 'QNNExecutionProvider' not in ort.get_available_providers():
         raise RuntimeError('onnxruntime was built without the QNN execution provider')
+      # Never allow a nominal QNN session to execute unsupported model nodes
+      # on ORT's CPU provider. Provider registration alone does not prove that
+      # the graph was fully assigned to HTP.
+      options.add_session_config_entry('session.disable_cpu_ep_fallback', '1')
       # The HTP executes each fused partition; ORT's CPU thread pool only sees
-      # a few fixed-shape bookkeeping nodes, so one worker avoids idle threads.
+      # runtime bookkeeping, so one worker avoids idle threads.
       options.intra_op_num_threads = int(os.getenv('QNN_INTRA_OP_THREADS', '1'))
       options.log_severity_level = int(os.getenv('QNN_ORT_LOG_LEVEL', '3'))
       providers = [('QNNExecutionProvider', {
@@ -89,6 +93,9 @@ class QnnModelRunner:
     self.session = ort.InferenceSession(model_source, sess_options=options, providers=providers)
     if use_qnn and self.session.get_providers()[0] != 'QNNExecutionProvider':
       raise RuntimeError(f'QNN execution provider failed to load: {self.session.get_providers()}')
+    self.io_binding = self.session.io_binding() if use_qnn else None
+    self.bound_inputs: dict[str, np.ndarray] = {}
+    self.bound_output: np.ndarray | None = None
     self.frame_skip = frame_skip
     img_shape = input_shapes['img']
     n_frames = img_shape[1] // 6
@@ -123,7 +130,27 @@ class QnnModelRunner:
       'traffic_convention': npy['traffic_convention'],
       'action_t': npy['action_t'],
     }
-    return self.session.run(None, inputs)[0][0]
+    if self.io_binding is None:
+      return self.session.run(None, inputs)[0][0]
+
+    if not self.bound_inputs:
+      self.bound_inputs = {name: np.ascontiguousarray(value) for name, value in inputs.items()}
+      for name, value in self.bound_inputs.items():
+        self.io_binding.bind_cpu_input(name, value)
+      outputs = self.session.get_outputs()
+      if len(outputs) != 1 or not all(isinstance(dimension, int) for dimension in outputs[0].shape):
+        raise RuntimeError(f'QNN model must have one fixed-shape output, got {[output.shape for output in outputs]}')
+      self.bound_output = np.empty(tuple(outputs[0].shape), dtype=np.float32)
+      self.io_binding.bind_output(
+        outputs[0].name, 'cpu', 0, self.bound_output.dtype, self.bound_output.shape, self.bound_output.ctypes.data,
+      )
+    else:
+      for name, value in inputs.items():
+        np.copyto(self.bound_inputs[name], value)
+
+    self.session.run_with_iobinding(self.io_binding)
+    assert self.bound_output is not None
+    return self.bound_output[0]
 
 
 def default_qnn_model_path(models_dir: Path) -> str | None:

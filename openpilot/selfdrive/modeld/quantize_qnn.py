@@ -21,21 +21,10 @@ FINAL_OUTPUT_HEADS = [
   "p_node_linear_20", "p_node_linear_21",
 ]
 TEMPORAL_HISTORY_NODES = {"p_node_Transpose_0", "p_node_GatherND_7", "p_node_index"}
+FIXED_SHAPE_RESHAPES = {"node_view", "p_node_view", "p_node_view_1", "p_node_view_2"}
 SCALE_BUCKETED_CONVS = {"node_conv2d_57"}
-HTP_OUTPUT_BIAS_CORRECTIONS = {
-  # The v68 HTP backend has a stable negative bias on the two published road
-  # edge log-standard-deviation channels. These corrections are the mean
-  # FP32-minus-HTP error over the 60 model-replay calibration captures.
-  "node_linear_33": {132: 0.78739524, 198: 0.35188565},
-  # Correct the stable per-horizon bias in the three disengagement logits.
-  # This reduces their aggregate probability MAE from 2.19% to 0.72% on the
-  # replay calibration captures without changing any classification logic.
-  "node_linear_62": {
-    1: 0.09908, 7: 0.10614, 13: 0.09259, 19: 0.09707, 25: 0.07823,
-    2: 0.49797, 8: 0.46575, 14: 0.40579, 20: 0.37251, 26: 0.37136,
-    3: 0.25675, 9: 0.27260, 15: 0.24516, 21: 0.25491, 27: 0.25595,
-  },
-}
+SCALE_BUCKET_LOG2_WIDTH = 1
+FUSE_BUCKET_SCALES = False
 
 
 class ModeldCalibrationReader(CalibrationDataReader):
@@ -131,10 +120,11 @@ def factor_conv_scales(source: Path, per_channel_model: Path, output: Path) -> d
 
     if node.name in SCALE_BUCKETED_CONVS:
       weight = numpy_helper.to_array(initializers[node.input[1]])
-      group = next(attribute.i for attribute in node.attribute if attribute.name == "group")
+      group = next((attribute.i for attribute in node.attribute if attribute.name == "group"), 1)
       outputs_per_input = weight.shape[0] // group
-      if weight.shape[1] != 1 or outputs_per_input * group != weight.shape[0]:
-        raise ValueError(f"{node.name} is not a depthwise convolution")
+      is_depthwise = group > 1 and weight.shape[1] == 1 and outputs_per_input * group == weight.shape[0]
+      if group != 1 and not is_depthwise:
+        raise ValueError(f"{node.name} has unsupported convolution groups")
       if np.any(channel_scale <= 0):
         raise ValueError(f"{node.name} has a non-positive channel scale")
 
@@ -143,59 +133,73 @@ def factor_conv_scales(source: Path, per_channel_model: Path, output: Path) -> d
         bias = numpy_helper.to_array(initializers[node.input[2]]).astype(np.float32)
 
       # QNN HTP only supports per-tensor convolution weights. A single tensor
-      # scale loses almost all precision here because this layer spans four
-      # orders of magnitude. Split its depthwise output channels into power-of-
-      # two scale buckets, then restore the original channel order. Gathering
-      # input channels (including duplicates for the depth multiplier) lets
-      # every bucket remain a valid depthwise convolution.
+      # scale loses almost all precision when the output-channel scales span
+      # several orders of magnitude. Split output channels into power-of-two
+      # scale buckets, then restore the original channel order. For depthwise
+      # convolution, gather matching input channels (including duplicates for
+      # a depth multiplier) so every bucket remains depthwise.
       bucket_outputs: list[str] = []
       channel_order: list[int] = []
-      bucket_ids = np.floor(np.log2(channel_scale)).astype(np.int32)
+      bucket_ids = np.floor(np.log2(channel_scale) / SCALE_BUCKET_LOG2_WIDTH).astype(np.int32)
       for bucket_id in sorted(np.unique(bucket_ids)):
         output_channels = np.flatnonzero(bucket_ids == bucket_id)
-        input_channels = output_channels // outputs_per_input
         suffix = f"m{-bucket_id}" if bucket_id < 0 else str(bucket_id)
         prefix = f"{node.name}_scale_bucket_{suffix}"
 
-        gather_indices_name = f"{prefix}_input_indices"
-        gathered_input = f"{prefix}_input"
-        new_initializers.append(numpy_helper.from_array(input_channels.astype(np.int32), gather_indices_name))
-        new_nodes.append(helper.make_node(
-          "Gather", [node.input[0], gather_indices_name], [gathered_input], name=f"{prefix}_input_gather", axis=1,
-        ))
+        bucket_input = node.input[0]
+        if is_depthwise:
+          input_channels = output_channels // outputs_per_input
+          gather_indices_name = f"{prefix}_input_indices"
+          bucket_input = f"{prefix}_input"
+          new_initializers.append(numpy_helper.from_array(input_channels.astype(np.int32), gather_indices_name))
+          new_nodes.append(helper.make_node(
+            "Gather", [node.input[0], gather_indices_name], [bucket_input], name=f"{prefix}_input_gather", axis=1,
+          ))
 
         bucket_scale = channel_scale[output_channels]
         base_scale = float(np.max(bucket_scale))
         weight_name = f"{prefix}_weight"
-        bucket_weight = ((quantized[output_channels].astype(np.int16) - 128) * base_scale).astype(np.float32)
+        if FUSE_BUCKET_SCALES:
+          bucket_weight = weight[output_channels].astype(np.float32)
+        else:
+          bucket_weight = ((quantized[output_channels].astype(np.int16) - 128) * base_scale).astype(np.float32)
         new_initializers.append(numpy_helper.from_array(bucket_weight, weight_name))
         overrides[weight_name] = [{"quant_type": QuantType.QUInt8, "scale": base_scale, "zero_point": 128}]
 
         bucket_conv = copy.deepcopy(node)
         bucket_conv.name = prefix
         del bucket_conv.input[:]
-        bucket_conv.input.extend([gathered_input, weight_name])
-        before_scale = f"{prefix}_before_channel_scale"
+        bucket_conv.input.extend([bucket_input, weight_name])
+        unit_channel_scale = FUSE_BUCKET_SCALES or np.allclose(bucket_scale, base_scale, rtol=0.0, atol=0.0)
+        if unit_channel_scale and bias is not None:
+          bias_name = f"{prefix}_bias"
+          new_initializers.append(numpy_helper.from_array(bias[output_channels], bias_name))
+          bucket_conv.input.append(bias_name)
+        before_scale = f"{prefix}_output" if unit_channel_scale else f"{prefix}_before_channel_scale"
         del bucket_conv.output[:]
         bucket_conv.output.append(before_scale)
-        next(attribute for attribute in bucket_conv.attribute if attribute.name == "group").i = len(output_channels)
+        if is_depthwise:
+          next(attribute for attribute in bucket_conv.attribute if attribute.name == "group").i = len(output_channels)
         new_nodes.append(bucket_conv)
 
-        scale_name = f"{prefix}_channel_scale_value"
-        new_initializers.append(numpy_helper.from_array((bucket_scale / base_scale).reshape(1, -1, 1, 1), scale_name))
-        scaled_output = f"{prefix}_scaled" if bias is not None else f"{prefix}_output"
-        new_nodes.append(helper.make_node(
-          "Mul", [before_scale, scale_name], [scaled_output], name=f"{prefix}_channel_scale",
-        ))
-        if bias is not None:
-          bias_name = f"{prefix}_bias"
-          new_initializers.append(numpy_helper.from_array(bias[output_channels].reshape(1, -1, 1, 1), bias_name))
-          bucket_output = f"{prefix}_output"
-          new_nodes.append(helper.make_node(
-            "Add", [scaled_output, bias_name], [bucket_output], name=f"{prefix}_post_scale_bias",
-          ))
+        if unit_channel_scale:
+          bucket_output = before_scale
         else:
-          bucket_output = scaled_output
+          scale_name = f"{prefix}_channel_scale_value"
+          new_initializers.append(numpy_helper.from_array((bucket_scale / base_scale).reshape(1, -1, 1, 1), scale_name))
+          scaled_output = f"{prefix}_scaled" if bias is not None else f"{prefix}_output"
+          new_nodes.append(helper.make_node(
+            "Mul", [before_scale, scale_name], [scaled_output], name=f"{prefix}_channel_scale",
+          ))
+          if bias is not None:
+            bias_name = f"{prefix}_bias"
+            new_initializers.append(numpy_helper.from_array(bias[output_channels].reshape(1, -1, 1, 1), bias_name))
+            bucket_output = f"{prefix}_output"
+            new_nodes.append(helper.make_node(
+              "Add", [scaled_output, bias_name], [bucket_output], name=f"{prefix}_post_scale_bias",
+            ))
+          else:
+            bucket_output = scaled_output
 
         bucket_outputs.append(bucket_output)
         channel_order.extend(output_channels.tolist())
@@ -256,7 +260,16 @@ def rewrite_temporal_policy_for_qnn(source: Path, output: Path) -> None:
   new_nodes = []
 
   for node in model.graph.node:
-    if node.name == "p_node_Transpose_0":
+    if node.name in FIXED_SHAPE_RESHAPES:
+      # The exporter sets allowzero=1, which QNN treats as a dynamic reshape
+      # and leaves on the CPU. None of these fixed shape tensors contains a
+      # zero, so allowzero=0 is exactly equivalent and lets HTP own the nodes.
+      allowzero = next(attribute for attribute in node.attribute if attribute.name == "allowzero")
+      if allowzero.i != 1:
+        raise ValueError(f"{node.name} has unexpected allowzero={allowzero.i}")
+      allowzero.i = 0
+      new_nodes.append(node)
+    elif node.name == "p_node_Transpose_0":
       # The original Transpose -> GatherND -> Transpose selects the newest nine
       # entries from the fixed 25-entry feature history. QNN does not implement
       # GatherND, so express the same operation as a direct slice on axis 1.
@@ -306,11 +319,12 @@ def rewrite_temporal_policy_for_qnn(source: Path, output: Path) -> None:
   onnx.save(model, output)
 
 
-def quantize_for_qnn(source: Path, output: Path, calibration_dir: Path, overrides: dict[str, list[dict]]) -> None:
+def quantize_for_qnn(source: Path, output: Path, calibration_dir: Path, overrides: dict[str, list[dict]],
+                     calibration_method: CalibrationMethod) -> None:
   config = get_qnn_qdq_config(
     source,
     ModeldCalibrationReader(calibration_dir),
-    calibrate_method=CalibrationMethod.MinMax,
+    calibrate_method=calibration_method,
     activation_type=QuantType.QUInt16,
     weight_type=QuantType.QUInt8,
     per_channel=True,
@@ -329,34 +343,12 @@ def quantize_for_qnn(source: Path, output: Path, calibration_dir: Path, override
   onnx.save(model, output)
 
 
-def apply_htp_output_bias_corrections(path: Path) -> None:
-  model = onnx.load(path, load_external_data=False)
-  nodes = {node.name: node for node in model.graph.node}
-  producers = {tensor: node for node in model.graph.node for tensor in node.output}
-  initializers = {initializer.name: initializer for initializer in model.graph.initializer}
-
-  for node_name, corrections in HTP_OUTPUT_BIAS_CORRECTIONS.items():
-    node = nodes[node_name]
-    bias_dq = producers[node.input[2]]
-    if bias_dq.op_type != "DequantizeLinear":
-      raise ValueError(f"{node_name} has an unquantized bias")
-    quantized_proto = initializers[bias_dq.input[0]]
-    scale = numpy_helper.to_array(initializers[bias_dq.input[1]])
-    quantized = numpy_helper.to_array(quantized_proto).copy()
-    for index, correction in corrections.items():
-      corrected = int(quantized[index]) + round(correction / float(scale[index]))
-      quantized[index] = np.clip(corrected, np.iinfo(quantized.dtype).min, np.iinfo(quantized.dtype).max)
-    quantized_proto.CopyFrom(numpy_helper.from_array(quantized, quantized_proto.name))
-
-  onnx.checker.check_model(model, full_check=True)
-  onnx.save(model, path)
-
-
 def main() -> None:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--source", type=Path, required=True, help="driving_supercombo.onnx")
   parser.add_argument("--calibration-dir", type=Path, required=True, help="directory of modeld input .npz captures")
   parser.add_argument("--output", type=Path, required=True)
+  parser.add_argument("--calibration-method", choices=("minmax", "percentile"), default="minmax")
   args = parser.parse_args()
   samples = sorted(args.calibration_dir.glob("*.npz"))
   if not samples:
@@ -386,8 +378,11 @@ def main() -> None:
     quantize_per_channel_reference(preprocessed, per_channel, args.calibration_dir)
     overrides = factor_conv_scales(preprocessed, per_channel, factored)
     rewrite_temporal_policy_for_qnn(factored, qnn_compatible)
-    quantize_for_qnn(qnn_compatible, args.output, args.calibration_dir, overrides)
-    apply_htp_output_bias_corrections(args.output)
+    calibration_method = {
+      "minmax": CalibrationMethod.MinMax,
+      "percentile": CalibrationMethod.Percentile,
+    }[args.calibration_method]
+    quantize_for_qnn(qnn_compatible, args.output, args.calibration_dir, overrides, calibration_method)
 
   digest = hashlib.sha256(args.output.read_bytes()).hexdigest()
   print(f"wrote {args.output} ({len(samples)} calibration samples, sha256 {digest})")

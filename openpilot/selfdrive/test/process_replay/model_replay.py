@@ -23,8 +23,8 @@ from openpilot.selfdrive.modeld.helpers import get_tg_input_devices
 
 TEST_ROUTE = "8494c69d3c710e81|000001d4--2648a9a404"
 SEGMENT = 4
-START_FRAME = 0
-END_FRAME = 60
+START_FRAME = int(os.getenv("MODEL_REPLAY_START_FRAME", "0"))
+END_FRAME = int(os.getenv("MODEL_REPLAY_END_FRAME", "60"))
 
 SEND_EXTRA_INPUTS = bool(int(os.getenv("SEND_EXTRA_INPUTS", "0")))
 
@@ -191,7 +191,10 @@ def model_replay(lr, frs):
   print("----------------- Model Timing -----------------")
   print("------------------------------------------------")
   print(tabulate(rows, header, tablefmt="simple_grid", stralign="center", numalign="center", floatfmt=".4f"))
-  assert timings_ok or PC
+  # Persisting every raw model input adds synchronous I/O to the timed loop.
+  # Keep reporting the measured timings, but do not fail a calibration capture
+  # run for overhead that is absent in normal modeld operation.
+  assert timings_ok or PC or os.getenv("MODEL_INPUTS_DUMP_DIR")
 
   return msgs
 
