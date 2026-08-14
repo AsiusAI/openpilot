@@ -112,7 +112,7 @@ def test_sharing_adds_only_the_asius_data_recipient(monkeypatch) -> None:
 
   class Client:
     def get_config(self):
-      return {"retentionPublicKey": asius_reader}
+      return {"sharingPublicKey": asius_reader}
 
     def put_access(self, document):
       published.update(document)
