@@ -76,9 +76,10 @@ class DataUploader(Uploader):
       else:
         cloudlog.event("data_upload_invalid_recipient", recipient=key)
     if self.params.get_bool("ShareDrivingData"):
-      asius_reader = self.client.get_config().get("retentionPublicKey")
+      config = self.client.get_config()
+      asius_reader = config.get("sharingPublicKey") or config.get("retentionPublicKey")
       if not isinstance(asius_reader, str) or not is_dongle_id(asius_reader) or not can_wrap_for(self.private_key, asius_reader):
-        raise ValueError("Data API returned an invalid retention public key")
+        raise ValueError("Data API returned an invalid sharing public key")
       readers.append(asius_reader)
     readers = sorted(set(readers))
     state = self.params.get(STATE_PARAM)
