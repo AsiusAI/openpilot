@@ -10,8 +10,8 @@ from openpilot.common.test import OpenpilotTestCase
 from openpilot.common.params import Params
 import openpilot.system.manager.manager as manager
 from openpilot.system.manager.process import ensure_running
-from openpilot.system.manager.process_config import managed_processes, procs
-from openpilot.common.hardware import HARDWARE
+from openpilot.system.manager.process_config import WEBCAM, managed_processes, procs
+from openpilot.common.hardware import HARDWARE, PC
 
 os.environ['FAKEUPLOAD'] = "1"
 
@@ -32,6 +32,11 @@ class TestManager(OpenpilotTestCase):
 
   def test_duplicate_procs(self):
     assert len(procs) == len(managed_processes), "Duplicate process names"
+
+  def test_driver_monitoring_processes_use_upstream_hardware_gate(self):
+    expected = WEBCAM or not PC
+    assert managed_processes["dmonitoringmodeld"].enabled == expected
+    assert managed_processes["dmonitoringd"].enabled == expected
 
   def test_blacklisted_procs(self):
     # TODO: ensure there are blacklisted procs until we have a dedicated test
