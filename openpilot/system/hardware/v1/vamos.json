@@ -3,26 +3,26 @@
   "minimum_updater_version": 1,
   "partitions": [
     {
-      "compressed_sha256": "50f4a6d986da68ca22fcc0fe6b2d63d8bb2a91395a831b7121301d70e8b8ac60",
-      "compressed_size": 14944188,
+      "compressed_sha256": "a8918a1da75459784947548d915740edf7cfe3c02f2710cf31d75b6e266ec24e",
+      "compressed_size": 14944192,
       "compression": "xz",
-      "hash": "ced86a68513e77b1a3b181dc26b7b5ed7f04a507383f0a05ebe764522e3408cf",
+      "hash": "233e8afc06d9c3944388f50e1482e0641f14b02b502ccc516147eaab00ebf566",
       "name": "esp",
-      "sha256": "ced86a68513e77b1a3b181dc26b7b5ed7f04a507383f0a05ebe764522e3408cf",
+      "sha256": "233e8afc06d9c3944388f50e1482e0641f14b02b502ccc516147eaab00ebf566",
       "size": 268435456,
-      "url": "https://updates.asius.ai/vamos/objects/esp-ced86a68513e77b1a3b181dc26b7b5ed7f04a507383f0a05ebe764522e3408cf.img.xz"
+      "url": "https://updates.asius.ai/vamos/objects/esp-233e8afc06d9c3944388f50e1482e0641f14b02b502ccc516147eaab00ebf566.img.xz"
     },
     {
-      "compressed_sha256": "22f1d3c9516d65adc58f1de66eab23b09a1bdc42b25f361b990988db7443b2f9",
-      "compressed_size": 553748360,
+      "compressed_sha256": "fc222fd8d3026337bf2a35c863ed23b0aba82500aa80e02d564a290d51ce3029",
+      "compressed_size": 600292388,
       "compression": "xz",
-      "hash": "b23e08862207b5ebf3703e0985990e3b53502d68240560c3c3664d0c1040445f",
+      "hash": "735f0fd77f7a72c4e3a775d4fce2199b9e3a6a54ecc746703d1095ebcfa56992",
       "name": "system",
-      "sha256": "b23e08862207b5ebf3703e0985990e3b53502d68240560c3c3664d0c1040445f",
+      "sha256": "735f0fd77f7a72c4e3a775d4fce2199b9e3a6a54ecc746703d1095ebcfa56992",
       "size": 10737418240,
-      "url": "https://updates.asius.ai/vamos/objects/system-b23e08862207b5ebf3703e0985990e3b53502d68240560c3c3664d0c1040445f.img.xz"
+      "url": "https://updates.asius.ai/vamos/objects/system-735f0fd77f7a72c4e3a775d4fce2199b9e3a6a54ecc746703d1095ebcfa56992.img.xz"
     }
   ],
   "product": "asius-v1",
-  "version": "18.2"
+  "version": "18.3"
 }
