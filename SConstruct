@@ -56,7 +56,11 @@ assert arch in [
   "Darwin",       # macOS arm64 (x86 not supported)
 ]
 
-pkg_names = ['acados', 'capnproto', 'ffmpeg', 'json11', 'ncurses', 'zeromq', 'zstd']
+pkg_names = ['acados', 'capnproto', 'ffmpeg', 'json11', 'zeromq', 'zstd']
+# ncurses is only used by desktop replay tools, which are not built on the
+# headless Asius target. AGNOS includes the tools dependency in its base image.
+if not ASIUS_HARDWARE:
+  pkg_names.append('ncurses')
 pkgs = [importlib.import_module(name) for name in pkg_names]
 acados = pkgs[pkg_names.index('acados')]
 ffmpeg = pkgs[pkg_names.index('ffmpeg')]
