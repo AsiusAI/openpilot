@@ -407,7 +407,7 @@ function op_switch() {
 }
 
 function op_start() {
-  if [[ -f "/AGNOS" ]]; then
+  if [[ -f "/AGNOS" || -f "/ASIUS" ]]; then
     op_before_cmd
     op_check_agnos_update
     op_run_command sudo systemctl restart comma $@
@@ -415,7 +415,7 @@ function op_start() {
 }
 
 function op_stop() {
-  if [[ -f "/AGNOS" ]]; then
+  if [[ -f "/AGNOS" || -f "/ASIUS" ]]; then
     op_before_cmd
     op_run_command sudo systemctl stop comma $@
   fi

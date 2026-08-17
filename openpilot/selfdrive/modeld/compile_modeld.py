@@ -292,27 +292,31 @@ if __name__ == "__main__":
   p.add_argument('--onnx', required=True)
   p.add_argument('--output', required=True)
   p.add_argument('--frame-skip', type=int, required=True)
+  p.add_argument('--skip-policy', action='store_true', help='compile camera warps only (the policy runs in another runtime)')
+  p.add_argument('--skip-warp', action='store_true', help='omit camera warps (the runtime uses another preprocessor)')
   args = p.parse_args()
 
   model_path = read_file_chunked_to_disk(args.onnx)
   model_w, model_h = args.model_size
 
-  model_runner = OnnxRunner(model_path)
   out = {'metadata': make_metadata_dict(model_path)}
 
-  run_policy_jit = TinyJit(make_run_policy(model_runner, out['metadata'], args.frame_skip), prune=True)
+  if not args.skip_policy:
+    model_runner = OnnxRunner(model_path)
+    run_policy_jit = TinyJit(make_run_policy(model_runner, out['metadata'], args.frame_skip), prune=True)
 
-  make_policy_queues = partial(make_input_queues, out['metadata']['input_shapes'], args.frame_skip)
-  make_random_model_inputs = partial(make_random_images, keys=['warped'], shape=(2, 6, *out['metadata']['input_shapes']['img'][2:]), device=WARP_DEV)
-  out['run_policy'] = compile_jit(run_policy_jit, make_random_model_inputs, POLICY_INPUTS,
-                                  make_policy_queues)
+    make_policy_queues = partial(make_input_queues, out['metadata']['input_shapes'], args.frame_skip)
+    make_random_model_inputs = partial(make_random_images, keys=['warped'], shape=(2, 6, *out['metadata']['input_shapes']['img'][2:]), device=WARP_DEV)
+    out['run_policy'] = compile_jit(run_policy_jit, make_random_model_inputs, POLICY_INPUTS,
+                                    make_policy_queues)
 
-  for cam_w, cam_h in args.camera_resolutions:
-    nv12 = NV12Frame(cam_w, cam_h, *get_nv12_info(cam_w, cam_h))
-    make_random_warp_inputs = partial(make_random_images, keys=['frame', 'big_frame'], shape=nv12.size, device=WARP_DEV)
-    warp = TinyJit(make_warp(nv12, model_w, model_h, args.frame_skip), prune=True)
-    make_warp_queues = partial(make_warp_input_queues, out['metadata']['input_shapes'], args.frame_skip)
-    out[(cam_w,cam_h)] = compile_jit(warp, make_random_warp_inputs, WARP_INPUTS, make_warp_queues)
+  if not args.skip_warp:
+    for cam_w, cam_h in args.camera_resolutions:
+      nv12 = NV12Frame(cam_w, cam_h, *get_nv12_info(cam_w, cam_h))
+      make_random_warp_inputs = partial(make_random_images, keys=['frame', 'big_frame'], shape=nv12.size, device=WARP_DEV)
+      warp = TinyJit(make_warp(nv12, model_w, model_h, args.frame_skip), prune=True)
+      make_warp_queues = partial(make_warp_input_queues, out['metadata']['input_shapes'], args.frame_skip)
+      out[(cam_w,cam_h)] = compile_jit(warp, make_random_warp_inputs, WARP_INPUTS, make_warp_queues)
 
   with open(args.output, "wb") as f:
     dump_oob(out, f)

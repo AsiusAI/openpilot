@@ -33,12 +33,26 @@ if arch == 'comma_arm64':
 else:
   tg_backend = 'CPU'
   tg_flags = f'DEV=CPU' if arch == 'Darwin' else 'DEV=CPU:LLVM'
-driving_tg_flags = tg_flags.replace(' NOLOCALS=1', '') if ASIUS_HARDWARE else tg_flags
+# QNN runs the driving policy on HTP; QCOM runs the whole tinygrad model on MSM.
+# MODELD_DEV is the single build-time switch between the two Asius configurations.
+# Keep the validated MSM backend as the default. QNN remains an explicit build
+# choice until its HTP replay matches MSM closely enough for a car test.
+modeld_dev = os.getenv('MODELD_DEV', tg_backend).upper()
+if modeld_dev not in ('QNN', tg_backend):
+  raise ValueError(f'MODELD_DEV must be QNN or {tg_backend}, got {modeld_dev!r}')
+modeld_tg_backend = tg_backend if modeld_dev == 'QNN' else modeld_dev
+# Local workgroups materially improve the full MSM policy. The warp-only QNN
+# bundle is bandwidth-bound and keeps the simpler no-locals schedule.
+driving_tg_flags = tg_flags if modeld_dev == 'QNN' or not ASIUS_HARDWARE else tg_flags.replace(' NOLOCALS=1', '')
 
 tg_devices = { # which device to put jit inputs to at runtime
   'openpilot.selfdrive.modeld.modeld': {
-    'default': {'WARP_DEV': tg_backend, 'QUEUE_DEV': tg_backend},
-    'usbgpu': {'WARP_DEV': tg_backend, 'QUEUE_DEV': 'AMD'}
+    'default': {
+      'WARP_DEV': modeld_tg_backend,
+      'QUEUE_DEV': 'CPU' if modeld_dev == 'QNN' else modeld_tg_backend,
+      'MODEL_BACKEND': 'qnn' if modeld_dev == 'QNN' else 'tinygrad',
+    },
+    'usbgpu': {'WARP_DEV': modeld_tg_backend, 'QUEUE_DEV': 'AMD', 'MODEL_BACKEND': 'tinygrad'}
   },
   'openpilot.selfdrive.modeld.dmonitoringmodeld': {
     'default': {'DEV': tg_backend}
@@ -85,9 +99,10 @@ for usbgpu in [False, True] if USBGPU else [False]:
         f'--model-size {model_w}x{model_h} '
         f'--camera-resolutions {camera_res_args} '
         f'--onnx {File(f"models/{file_prefix}driving_supercombo.onnx").abspath} '
-        f'--output {target_pkl_path} --frame-skip {frame_skip}')
+        f'--output {target_pkl_path} --frame-skip {frame_skip} '
+        f'{"--skip-policy" if modeld_dev == "QNN" else ""}')
   onnx_sizes_sum = sum(os.path.getsize(f) for f in driving_onnx_deps)
-  chunk_targets = get_chunk_targets(target_pkl_path, estimate_pickle_max_size(onnx_sizes_sum))
+  chunk_targets = get_chunk_targets(target_pkl_path, 1 if modeld_dev == 'QNN' else estimate_pickle_max_size(onnx_sizes_sum))
   def do_compile(target, source, env, command=cmd, pkl=target_pkl_path, chunks=chunk_targets):
     # chestnut can enumerate before its PCIe link is up due to varying 12V power behavior across cars
     probe_cmd = [sys.executable, '-c', 'from openpilot.selfdrive.modeld.compile_modeld import Device; Device[Device.DEFAULT]']

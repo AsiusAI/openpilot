@@ -19,11 +19,12 @@ from openpilot.selfdrive.test.process_replay.process_replay import get_process_c
 from openpilot.tools.lib.framereader import FrameReader
 from openpilot.tools.lib.logreader import LogReader, save_log
 from openpilot.tools.lib.github_utils import GithubUtils
+from openpilot.selfdrive.modeld.helpers import get_tg_input_devices
 
 TEST_ROUTE = "8494c69d3c710e81|000001d4--2648a9a404"
 SEGMENT = 4
-START_FRAME = 0
-END_FRAME = 60
+START_FRAME = int(os.getenv("MODEL_REPLAY_START_FRAME", "0"))
+END_FRAME = int(os.getenv("MODEL_REPLAY_END_FRAME", "60"))
 
 SEND_EXTRA_INPUTS = bool(int(os.getenv("SEND_EXTRA_INPUTS", "0")))
 
@@ -190,7 +191,10 @@ def model_replay(lr, frs):
   print("----------------- Model Timing -----------------")
   print("------------------------------------------------")
   print(tabulate(rows, header, tablefmt="simple_grid", stralign="center", numalign="center", floatfmt=".4f"))
-  assert timings_ok or PC
+  # Persisting every raw model input adds synchronous I/O to the timed loop.
+  # Keep reporting the measured timings, but do not fail a calibration capture
+  # run for overhead that is absent in normal modeld operation.
+  assert timings_ok or PC or os.getenv("MODEL_INPUTS_DUMP_DIR")
 
   return msgs
 
@@ -232,6 +236,8 @@ if __name__ == "__main__":
   log_msgs = []
   # run replays
   log_msgs += model_replay(lr, frs)
+  if output_path := os.getenv("MODEL_REPLAY_OUTPUT"):
+    save_log(output_path, log_msgs)
 
   # get diff
   failed = False
@@ -275,7 +281,12 @@ if __name__ == "__main__":
         for i in range(2):
           for field in ('x', 'y', 'z', 't'):
             ignore.append(f'modelV2.roadEdges.{i}.{field}')
-      tolerance = .3 if PC or ASIUS_HARDWARE else None
+      selected_backend = os.getenv("MODEL_BACKEND", get_tg_input_devices("openpilot.selfdrive.modeld.modeld", False).get("MODEL_BACKEND", ""))
+      qnn_replay = selected_backend.lower() == "qnn" or os.path.basename(os.getenv("MODEL_ONNX_PATH", "")) == "driving_supercombo_qnn.onnx"
+      # MSM is already within 0.1 of the reference on the Dragon replay. Keep
+      # QNN at that same threshold so quantization or HTP drift cannot hide
+      # behind the looser cross-hardware tolerance.
+      tolerance = .1 if qnn_replay else (.3 if PC or ASIUS_HARDWARE else None)
       results: Any = {TEST_ROUTE: {}}
       log_paths: Any = {TEST_ROUTE: {"models": {'ref': log_fn, 'new': log_fn}}}
       results[TEST_ROUTE]["models"] = compare_logs(cmp_log, log_msgs, tolerance=tolerance, ignore_fields=ignore)
