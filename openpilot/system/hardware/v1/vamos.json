@@ -3,26 +3,26 @@
   "minimum_updater_version": 1,
   "partitions": [
     {
-      "compressed_sha256": "068a0eb292fbc425814388c45529023f1c0f71602871dddcc39536e8771cfc79",
+      "compressed_sha256": "c740f03faba013fd372ef96517f4a04eda61f0c7828930a8d6af36d550283216",
       "compressed_size": 14944192,
       "compression": "xz",
-      "hash": "acd363eac48fb86cb5e7a26bac23cb852604d41ce4ca2541f22c2f95399cd06b",
+      "hash": "3da71d6385dabfda928e7b7bd57ffbb52ba0982b07eb9aaa179cd844a8aacba2",
       "name": "esp",
-      "sha256": "acd363eac48fb86cb5e7a26bac23cb852604d41ce4ca2541f22c2f95399cd06b",
+      "sha256": "3da71d6385dabfda928e7b7bd57ffbb52ba0982b07eb9aaa179cd844a8aacba2",
       "size": 268435456,
-      "url": "https://updates.asius.ai/vamos/objects/esp-acd363eac48fb86cb5e7a26bac23cb852604d41ce4ca2541f22c2f95399cd06b.img.xz"
+      "url": "https://updates.asius.ai/vamos/objects/esp-3da71d6385dabfda928e7b7bd57ffbb52ba0982b07eb9aaa179cd844a8aacba2.img.xz"
     },
     {
-      "compressed_sha256": "814d061192f08764051ffa99bd89a82a2c4609f7f496614cba3297fc8e1f87a4",
-      "compressed_size": 599698240,
+      "compressed_sha256": "76a9540f6ce3daac4c39587217c6ad6a17e41497d868adb5d8edf5db4e4b24e0",
+      "compressed_size": 602028512,
       "compression": "xz",
-      "hash": "492f4ea58f9c0f5a9b12c6627632894edd6c4582bf1d1907afb553c7fb03fa92",
+      "hash": "b33d36849b2b9013546a10657ebb7c64c3d480b4e3b7ef7ca2e7dc1e2e201275",
       "name": "system",
-      "sha256": "492f4ea58f9c0f5a9b12c6627632894edd6c4582bf1d1907afb553c7fb03fa92",
+      "sha256": "b33d36849b2b9013546a10657ebb7c64c3d480b4e3b7ef7ca2e7dc1e2e201275",
       "size": 10737418240,
-      "url": "https://updates.asius.ai/vamos/objects/system-492f4ea58f9c0f5a9b12c6627632894edd6c4582bf1d1907afb553c7fb03fa92.img.xz"
+      "url": "https://updates.asius.ai/vamos/objects/system-b33d36849b2b9013546a10657ebb7c64c3d480b4e3b7ef7ca2e7dc1e2e201275.img.xz"
     }
   ],
   "product": "asius-v1",
-  "version": "18.5"
+  "version": "18.6"
 }
