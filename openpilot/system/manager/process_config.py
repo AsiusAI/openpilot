@@ -8,6 +8,7 @@ from openpilot.common.hardware import ASIUS_HARDWARE, COMMA_HARDWARE, PC
 from openpilot.system.manager.process import PythonProcess, NativeProcess, DaemonProcess
 
 WEBCAM = os.getenv("USE_WEBCAM") is not None
+NO_DCAM = os.getenv("NO_DCAM") == "1"
 
 def driverview(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started or params.get_bool("IsDriverViewEnabled")
@@ -92,7 +93,8 @@ procs = [
 
   PythonProcess("modeld", "openpilot.selfdrive.modeld.modeld", only_onroad),
 
-  PythonProcess("dmonitoringmodeld", "openpilot.selfdrive.modeld.dmonitoringmodeld", driverview, enabled=(WEBCAM or not PC)),
+  PythonProcess("dmonitoringmodeld", "openpilot.selfdrive.modeld.dmonitoringmodeld", driverview,
+                enabled=(WEBCAM or not PC) and not NO_DCAM),
   PythonProcess("sensord", "openpilot.system.sensord.sensord", only_onroad, enabled=not PC),
   PythonProcess("ui", "openpilot.selfdrive.ui.ui", always_run, enabled=not ASIUS_HARDWARE),
   PythonProcess("soundd", "openpilot.selfdrive.ui.soundd", driverview),
@@ -107,6 +109,7 @@ procs = [
   PythonProcess("selfdrived", "openpilot.selfdrive.selfdrived.selfdrived", only_onroad),
   PythonProcess("card", "openpilot.selfdrive.car.card", only_onroad),
   PythonProcess("deleter", "openpilot.system.loggerd.deleter", always_run),
+  # Keep dmonitoringd alive with NO_DCAM so it can publish a neutral state for controls.
   PythonProcess("dmonitoringd", "openpilot.selfdrive.monitoring.dmonitoringd", driverview, enabled=(WEBCAM or not PC)),
   PythonProcess("qcomgpsd", "openpilot.system.qcomgpsd.qcomgpsd", qcomgps, enabled=COMMA_HARDWARE),
   PythonProcess("pandad", "openpilot.selfdrive.pandad.pandad", always_run, enabled=not ASIUS_HARDWARE),
