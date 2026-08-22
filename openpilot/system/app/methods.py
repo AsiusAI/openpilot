@@ -7,11 +7,12 @@ import base64
 import json
 import queue
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
 from queue import Queue
-from typing import Any, Protocol, cast
+from typing import Any, Callable, Protocol, cast
 
 import requests
 from websocket import ABNF, WebSocket, WebSocketTimeoutException
@@ -25,6 +26,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.version import get_build_metadata
 from openpilot.system.athena import athenad as upstream_athena
 from openpilot.system.athena.rpc import Dispatcher, handle
+from openpilot.system.app.device_name import get_device_name, set_device_name
 from openpilot.system.app.terminal import TerminalManager
 from openpilot.system.app.websocketd import (
   authorize_peer,
@@ -47,6 +49,7 @@ RECONNECT_TIMEOUT_S = 70
 WS_FRAME_SIZE = 4096
 LIVE_STATE_INTERVAL_S = 1.0
 VAMOS_UPDATE_STATE_FILE = Path("/data/vamos-update/state.json")
+VAMOS_WIFI_COMMAND = Path("/usr/bin/vamos-wifi")
 SAVE_PARAMS_BLOCKED_KEYS = {
   "AccessToken",
   "ApiCache_Device",
@@ -218,6 +221,16 @@ def getPublicKey() -> str | None:
 
 
 @dispatcher.add_method
+def getDeviceName() -> str:
+  return get_device_name()
+
+
+@dispatcher.add_method
+def setDeviceName(name: str) -> dict[str, str]:
+  return {"name": set_device_name(name)}
+
+
+@dispatcher.add_method
 def getAuthorizedPeers() -> dict[str, Any]:
   return {
     "peers": [
@@ -380,7 +393,24 @@ def _nmcli(args: list[str], sensitive: bool = False) -> str:
 
 
 def _nmcli_fields(line: str) -> list[str]:
-  return line.rstrip("\n").split(":")
+  fields = []
+  current = []
+  escaped = False
+  for char in line.rstrip("\n"):
+    if escaped:
+      current.append(char)
+      escaped = False
+    elif char == "\\":
+      escaped = True
+    elif char == ":":
+      fields.append("".join(current))
+      current = []
+    else:
+      current.append(char)
+  if escaped:
+    current.append("\\")
+  fields.append("".join(current))
+  return fields
 
 
 def _tethering_ssid() -> str:
@@ -388,29 +418,123 @@ def _tethering_ssid() -> str:
   return "weedle" + (f"-{dongle_id[:4]}" if dongle_id else "")
 
 
-def _saved_wifi_connections() -> set[str]:
-  saved: set[str] = set()
-  output = _nmcli(["-t", "--escape", "no", "-f", "NAME,TYPE", "connection", "show"])
+def _wifi_connections(saved_only: bool = False) -> dict[str, str]:
+  """Return SSID -> NetworkManager connection name.
+
+  NetworkManager persists a profile before it has successfully associated. A
+  zero timestamp identifies those never-connected profiles; presenting them as
+  saved makes the app retry bad credentials without asking for a password.
+  """
+  connections: dict[str, str] = {}
+  output = _nmcli(["-t", "--escape", "yes", "-f", "NAME,TYPE,TIMESTAMP", "connection", "show"])
   for line in output.splitlines():
     fields = _nmcli_fields(line)
-    if len(fields) >= 2 and fields[1] == "802-11-wireless":
-      saved.add(fields[0].removeprefix("openpilot connection "))
-  return saved
+    if len(fields) >= 3 and fields[1] == "802-11-wireless" and (not saved_only or int(fields[2] or 0) > 0):
+      name = fields[0]
+      connections[name.removeprefix("openpilot connection ")] = name
+  return connections
+
+
+def _saved_wifi_connections() -> set[str]:
+  return set(_wifi_connections(saved_only=True))
 
 
 def _wifi_connection_name(ssid: str) -> str:
-  output = _nmcli(["-t", "--escape", "no", "-f", "NAME,TYPE", "connection", "show"])
-  for line in output.splitlines():
-    fields = _nmcli_fields(line)
-    if len(fields) >= 2 and fields[1] == "802-11-wireless":
-      name = fields[0]
-      if name == ssid or name.removeprefix("openpilot connection ") == ssid:
-        return name
-  return f"openpilot connection {ssid}"
+  return _wifi_connections().get(ssid, f"openpilot connection {ssid}")
+
+
+def _delete_wifi_connections(ssid: str) -> None:
+  names = {name for profile_ssid, name in _wifi_connections().items() if profile_ssid == ssid}
+  for name in names:
+    subprocess.run(["sudo", "-n", "nmcli", "connection", "delete", name], check=False,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _vamos_wifi(args: list[str], password: str = "") -> bool:
+  if not VAMOS_WIFI_COMMAND.is_file():
+    return False
+  try:
+    subprocess.check_output(
+      ["sudo", "-n", str(VAMOS_WIFI_COMMAND), *args],
+      input=f"{password}\n",
+      stderr=subprocess.STDOUT,
+      encoding="utf-8",
+    )
+  except subprocess.CalledProcessError as e:
+    raise Exception(e.output.strip() or f"vamos-wifi {' '.join(args)} failed") from e
+  return True
+
+
+def _activate_new_wifi_connection(ssid: str, password: str, hidden: bool) -> None:
+  if _vamos_wifi(["connect", ssid, *(["--hidden"] if hidden else [])], password):
+    return
+
+  name = f"openpilot connection {ssid}"
+  _delete_wifi_connections(ssid)
+
+  password_file = None
+  try:
+    if password:
+      if "\n" in password or "\r" in password:
+        raise Exception("Wi-Fi passwords cannot contain line breaks")
+      password_file = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix="nmcli-passwd-", dir="/tmp", delete=False)
+      password_file.write(f"802-11-wireless-security.psk:{password}\n")
+      password_file.close()
+
+    # Give NetworkManager only the user intent. It completes the connection
+    # from the selected AP's capabilities, including its security mode.
+    args = ["--wait", "45"]
+    if password_file is not None:
+      args += ["--passwd-file", password_file.name]
+    args += ["device", "wifi", "connect", ssid, "ifname", "wlan0", "name", name]
+    if hidden:
+      args += ["hidden", "yes"]
+    _nmcli(args)
+  except Exception as e:
+    _delete_wifi_connections(ssid)
+    raise Exception(f"Could not connect to {ssid}. Check the password and hotspot settings.") from e
+  finally:
+    if password_file is not None:
+      Path(password_file.name).unlink(missing_ok=True)
+
+
+_network_operation_lock = threading.Lock()
+_network_operation: dict[str, str | float] = {"action": "", "ssid": "", "state": "idle", "error": "", "updatedAt": 0.0}
+
+
+def _network_operation_snapshot() -> dict[str, str | float]:
+  with _network_operation_lock:
+    return _network_operation.copy()
+
+
+def _start_network_operation(action: str, ssid: str, callback: Callable[[], None]) -> dict[str, int | str]:
+  global _network_operation
+  with _network_operation_lock:
+    if _network_operation["state"] == "running":
+      return {"success": 0, "error": f"network {_network_operation['action']} already in progress"}
+    _network_operation = {"action": action, "ssid": ssid, "state": "running", "error": "", "updatedAt": time.time()}  # noqa: TID251
+
+  def worker() -> None:
+    global _network_operation
+    # Allow the RPC response to leave over the current Wi-Fi connection before
+    # NetworkManager tears it down. Bluetooth callers benefit from the same
+    # asynchronous, observable operation state.
+    time.sleep(0.5)
+    try:
+      callback()
+      state, error = "succeeded", ""
+    except Exception as e:
+      cloudlog.exception("app.network_operation_failed action=%s ssid=%s", action, ssid)
+      state, error = "failed", str(e)
+    with _network_operation_lock:
+      _network_operation = {"action": action, "ssid": ssid, "state": state, "error": error, "updatedAt": time.time()}  # noqa: TID251
+
+  threading.Thread(target=worker, daemon=True, name=f"network-{action}").start()
+  return {"success": 1}
 
 
 def _active_wifi_connection() -> str:
-  output = _nmcli(["-t", "--escape", "no", "-f", "NAME,TYPE,DEVICE", "connection", "show", "--active"])
+  output = _nmcli(["-t", "--escape", "yes", "-f", "NAME,TYPE,DEVICE", "connection", "show", "--active"])
   for line in output.splitlines():
     fields = _nmcli_fields(line)
     if len(fields) >= 3 and fields[1] == "802-11-wireless":
@@ -418,10 +542,20 @@ def _active_wifi_connection() -> str:
   return ""
 
 
+def _active_ethernet_interface() -> str:
+  output = _nmcli(["-t", "--escape", "yes", "-f", "DEVICE,TYPE,STATE", "device", "status"])
+  for line in output.splitlines():
+    fields = _nmcli_fields(line)
+    if len(fields) >= 3 and fields[1] == "ethernet" and fields[2].startswith("connected"):
+      return fields[0]
+  return ""
+
+
 def _nmcli_wifi_networks() -> list[dict[str, str | int | bool]]:
   saved = _saved_wifi_connections()
+  operation = _network_operation_snapshot()
   networks_by_ssid: dict[str, dict[str, str | int | bool]] = {}
-  output = _nmcli(["-t", "--escape", "no", "-f", "ACTIVE,SSID,SIGNAL,SECURITY", "device", "wifi", "list"])
+  output = _nmcli(["-t", "--escape", "yes", "-f", "ACTIVE,SSID,SIGNAL,SECURITY", "device", "wifi", "list"])
   for line in output.splitlines():
     fields = _nmcli_fields(line)
     if len(fields) < 4:
@@ -437,7 +571,8 @@ def _nmcli_wifi_networks() -> list[dict[str, str | int | bool]]:
       "saved": ssid in saved,
       "tethering": ssid == _tethering_ssid(),
       "connected": active == "yes",
-      "connecting": False,
+      "connecting": operation["state"] == "running" and operation["action"] == "connect" and operation["ssid"] == ssid,
+      "passwordRequired": bool(security) and (ssid not in saved or (operation["state"] == "failed" and operation["ssid"] == ssid)),
     }
     existing = networks_by_ssid.get(ssid)
     if existing is None or int(network["strength"]) > int(existing["strength"]):
@@ -446,12 +581,14 @@ def _nmcli_wifi_networks() -> list[dict[str, str | int | bool]]:
 
 
 def _nmcli_wifi_state() -> dict[str, str | int | None]:
-  output = _nmcli(["-t", "--escape", "no", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"])
+  output = _nmcli(["-t", "--escape", "yes", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"])
   for line in output.splitlines():
     fields = _nmcli_fields(line)
     if len(fields) >= 4 and fields[1] == "wifi":
-      connection = fields[3].removeprefix("openpilot connection ") or None
       status = 2 if fields[2].startswith("connected") else 1 if fields[2] == "connecting" else 0
+      connection = (fields[3].removeprefix("openpilot connection ") or None) if status else None
+      if isinstance(connection, str) and connection.lower() in ("--", "none"):
+        connection = None
       return {"ssid": connection, "status": status}
   return {"ssid": None, "status": 0}
 
@@ -460,7 +597,7 @@ def _connection_metered() -> int:
   connection = _active_wifi_connection()
   if not connection:
     return 0
-  value = _nmcli(["-t", "--escape", "no", "-g", "connection.metered", "connection", "show", connection]).strip().lower()
+  value = _nmcli(["-t", "--escape", "yes", "-g", "connection.metered", "connection", "show", connection]).strip().lower()
   return {"yes": 1, "no": 2}.get(value, 0)
 
 
@@ -517,15 +654,21 @@ def _signal_updated(signal_name: str) -> dict[str, int | str]:
 @dispatcher.add_method
 def getNetworkState() -> dict:
   params = Params()
-  local_ips = _local_ips()
+  local_ips = [ip for ip in _local_ips() if ip["interface"] != "lo"]
   wifi_ip = next((ip["address"] for ip in local_ips if ip["interface"] == "wlan0"), "")
   wifi_state = _nmcli_wifi_state()
+  ethernet_interface = _active_ethernet_interface()
+  network_type = int(HARDWARE.get_network_type())
+  if wifi_state["status"] != 2 and ethernet_interface:
+    network_type = 6
+  local_ip = wifi_ip or next((ip["address"] for ip in local_ips if ip["interface"] == ethernet_interface), "")
   return {
-    "networkType": int(HARDWARE.get_network_type()),
+    "networkType": network_type,
     "networkMetered": HARDWARE.get_network_metered(HARDWARE.get_network_type()),
     "wifi": wifi_state,
     "networks": _nmcli_wifi_networks(),
-    "localIp": wifi_ip,
+    "operation": _network_operation_snapshot(),
+    "localIp": local_ip,
     "localIps": local_ips,
     "currentNetworkMetered": _connection_metered(),
     "tetheringActive": wifi_state["ssid"] == "Hotspot" or wifi_state["ssid"] == _tethering_ssid(),
@@ -539,29 +682,51 @@ def getNetworkState() -> dict:
 
 @dispatcher.add_method
 def refreshNetworks() -> dict:
-  _nmcli(["device", "wifi", "rescan", "ifname", "wlan0"])
+  if not _vamos_wifi(["scan"]):
+    _nmcli(["device", "wifi", "rescan", "ifname", "wlan0"])
   return getNetworkState()
 
 
 @dispatcher.add_method
-def connectNetwork(ssid: str, password: str = "", hidden: bool = False) -> dict[str, int]:
-  if ssid in _saved_wifi_connections() and not password and not hidden:
-    _nmcli(["connection", "up", _wifi_connection_name(ssid)])
-  else:
-    args = ["device", "wifi", "connect", ssid, "ifname", "wlan0"]
-    if password:
-      args += ["password", password]
-    if hidden:
-      args += ["hidden", "yes"]
-    _nmcli(args, sensitive=bool(password))
-  return {"success": 1}
+def connectNetwork(ssid: str, password: str = "", hidden: bool = False) -> dict[str, int | str]:
+  if not ssid:
+    return {"success": 0, "error": "SSID is required"}
+
+  def connect() -> None:
+    if ssid in _saved_wifi_connections() and not password and not hidden:
+      _nmcli(["--wait", "45", "connection", "up", _wifi_connection_name(ssid)])
+      return
+
+    _activate_new_wifi_connection(ssid, password, hidden)
+
+  return _start_network_operation("connect", ssid, connect)
 
 
 @dispatcher.add_method
-def forgetNetwork(ssid: str) -> dict[str, int]:
-  for name in (f"openpilot connection {ssid}", ssid):
-    subprocess.run(["sudo", "-n", "nmcli", "connection", "delete", name], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-  return {"success": 1}
+def disconnectNetwork(ssid: str = "") -> dict[str, int | str]:
+  active_ssid = _nmcli_wifi_state()["ssid"] or ""
+  if ssid and active_ssid != ssid:
+    return {"success": 0, "error": f"{ssid} is not connected"}
+  if not active_ssid:
+    return {"success": 1}
+
+  def disconnect() -> None:
+    if not _vamos_wifi(["disconnect"]):
+      _nmcli(["device", "disconnect", "wlan0"])
+
+  return _start_network_operation("disconnect", active_ssid, disconnect)
+
+
+@dispatcher.add_method
+def forgetNetwork(ssid: str) -> dict[str, int | str]:
+  if not ssid:
+    return {"success": 0, "error": "SSID is required"}
+
+  def forget() -> None:
+    if not _vamos_wifi(["forget", ssid]):
+      _delete_wifi_connections(ssid)
+
+  return _start_network_operation("forget", ssid, forget)
 
 
 @dispatcher.add_method
@@ -662,6 +827,7 @@ def _live_state_snapshot(sm: messaging.SubMaster, params: Params) -> dict[str, A
   return {
     "ts": time.time(),  # noqa: TID251
     "dongleId": params.get("DongleId"),
+    "deviceName": get_device_name(),
     "serial": params.get("HardwareSerial"),
     "version": {
       "version": build_metadata.openpilot.version,
@@ -740,7 +906,12 @@ def handle_peer_message(data: str) -> bool:
         raise Exception("invalid pair token")
       authorize_peer(body["publicKey"], label=body.get("label") if isinstance(body.get("label"), str) else None)
       cloudlog.event("athena.websocket.paired", sender=sender)
-      send_peer_payload(sender, {"type": "pair-response", "publicKey": dongle_id, "device-type": HARDWARE.get_device_type()})
+      send_peer_payload(sender, {
+        "type": "pair-response",
+        "publicKey": dongle_id,
+        "device-type": HARDWARE.get_device_type(),
+        "name": get_device_name(),
+      })
       return True
 
     if sender not in load_authorized_peers():

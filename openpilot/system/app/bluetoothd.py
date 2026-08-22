@@ -20,6 +20,7 @@ from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 import openpilot.cereal.messaging as messaging
 from openpilot.system.app import methods
+from openpilot.system.app.device_name import get_device_name
 from openpilot.system.app.identity import is_dongle_id
 from openpilot.system.app.terminal import TerminalManager
 from openpilot.system.app.websocketd import (
@@ -57,7 +58,6 @@ TERMINAL_OUTPUT_QUEUE_SIZE = 64
 NOTIFICATION_FRAME_DELAY_SECONDS = 0.004
 REGISTER_RETRY_SECONDS = 3.
 DEVICE_TYPE = "asius-v1"
-DEVICE_NAME = "Asius v1"
 APP_PAIRING_UNTIL_PARAM = "AppPairingUntil"
 
 BLE_SERVICE_UUID = "84a48ccf-5c26-56f7-91b8-5c39abd40cb9"
@@ -278,7 +278,7 @@ class Advertisement(ServiceInterface):
 
   @dbus_property(access=PropertyAccess.READ)
   def LocalName(self) -> DBusStr:
-    return DEVICE_NAME if self.pairing else ""
+    return get_device_name() if self.pairing else ""
 
   @dbus_property(access=PropertyAccess.READ)
   def Discoverable(self) -> DBusBool:
@@ -408,7 +408,7 @@ class BlePeerEngine:
       "v": 1,
       "publicKey": self.dongle_id,
       "deviceType": DEVICE_TYPE,
-      "name": DEVICE_NAME,
+      "name": get_device_name(),
       "maxFrameBytes": MAX_FRAME_BYTES,
     }
     await self.tx.send_text(json.dumps(response, separators=(",", ":")), initial=True)
@@ -437,6 +437,7 @@ class BlePeerEngine:
       "type": "pair-response",
       "publicKey": self.dongle_id,
       "device-type": DEVICE_TYPE,
+      "name": get_device_name(),
     })
     cloudlog.event("asius.bluetooth.paired", sender=sender, request_id=request_id)
 
@@ -471,6 +472,7 @@ class BlePeerEngine:
         "type": "pair-response",
         "publicKey": self.dongle_id,
         "device-type": DEVICE_TYPE,
+        "name": get_device_name(),
       })
     elif message_type == "ble-session":
       await self.send_body(sender, {"type": "ble-session", "ready": True})
@@ -575,7 +577,7 @@ async def set_adapter_property(bus: MessageBus, adapter: str, name: str, value: 
 
 async def register_bluez(bus: MessageBus, adapter: str, advertisement: Advertisement) -> None:
   await set_adapter_property(bus, adapter, "Powered", Variant("b", True))
-  await set_adapter_property(bus, adapter, "Alias", Variant("s", DEVICE_NAME))
+  await set_adapter_property(bus, adapter, "Alias", Variant("s", get_device_name()))
   advertisement.pairing = pairing_mode_active()
   await set_adapter_property(bus, adapter, "Pairable", Variant("b", advertisement.pairing))
   await checked_call(bus, method_call("/org/bluez", AGENT_MANAGER, "RegisterAgent", "os", [AGENT_PATH, "NoInputNoOutput"]))
