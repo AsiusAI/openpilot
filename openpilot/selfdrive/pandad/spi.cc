@@ -68,9 +68,10 @@ PandaSpiHandle::PandaSpiHandle(std::string serial) {
   uint32_t spi_mode = SPI_MODE_0;
   uint8_t spi_bits_per_word = 8;
 
-  // The Dragon Q6A header translates SPI through a UM3304. Keep enough
-  // round-trip margin for SCK A->B and MISO B->A propagation.
-  uint32_t spi_speed = 25000000;
+  // Request 37 MHz to select the Dragon GENI controller's 33.33 MHz clock
+  // step. The next step (37.5 MHz actual) is not reliable through the Q6A's
+  // UM3304 header translator.
+  uint32_t spi_speed = 37000000;
   try {
     if (!util::file_exists(SPI_DEVICE)) {
       throw std::runtime_error("Error connecting to panda: SPI device not found");
