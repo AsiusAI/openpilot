@@ -28,6 +28,7 @@ from openpilot.common.hardware import HARDWARE
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
 TESTING_CLOSET = "TESTING_CLOSET" in os.environ
+NO_DCAM = os.getenv("NO_DCAM") == "1"
 
 LONGITUDINAL_PERSONALITY_MAP = {v: k for k, v in log.LongitudinalPersonality.schema.enumerants.items()}
 
@@ -43,6 +44,13 @@ AlertLevel = log.DriverMonitoringState.AlertLevel
 MonitoringPolicy = log.DriverMonitoringState.MonitoringPolicy
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
+
+
+def get_camera_packets(no_dcam: bool) -> list[str]:
+  packets = ["roadCameraState", "wideRoadCameraState"]
+  if not no_dcam:
+    packets.insert(1, "driverCameraState")
+  return packets
 
 
 class SelfdriveD:
@@ -76,7 +84,7 @@ class SelfdriveD:
     self.gps_location_service = get_gps_location_service(self.params)
     self.gps_packets = [self.gps_location_service]
     self.sensor_packets = ["accelerometer", "gyroscope"]
-    self.camera_packets = ["roadCameraState", "driverCameraState", "wideRoadCameraState"]
+    self.camera_packets = get_camera_packets(NO_DCAM)
 
     # TODO: de-couple selfdrived with card/conflate on carState without introducing controls mismatches
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)

@@ -1,12 +1,37 @@
 #!/usr/bin/env python3
+import os
+
 import openpilot.cereal.messaging as messaging
 from openpilot.common.params import Params
-from openpilot.common.realtime import config_realtime_process
+from openpilot.common.realtime import config_realtime_process, DT_DMON, Ratekeeper
 from openpilot.selfdrive.monitoring.policy import DriverMonitoring
+
+
+NO_DCAM = os.getenv("NO_DCAM") == "1"
+
+
+def get_no_dcam_state():
+  dat = messaging.new_message('driverMonitoringState', valid=True)
+  dat.driverMonitoringState.visionPolicyState.awarenessPercent = 100
+  dat.driverMonitoringState.wheeltouchPolicyState.awarenessPercent = 100
+  return dat
+
+
+def no_dcam_thread():
+  pm = messaging.PubMaster(['driverMonitoringState'])
+  rk = Ratekeeper(1 / DT_DMON, print_delay_threshold=None)
+
+  while True:
+    pm.send('driverMonitoringState', get_no_dcam_state())
+    rk.keep_time()
 
 
 def dmonitoringd_thread():
   config_realtime_process([0, 1, 2, 3], 5)
+
+  if NO_DCAM:
+    no_dcam_thread()
+    return
 
   params = Params()
   pm = messaging.PubMaster(['driverMonitoringState'])

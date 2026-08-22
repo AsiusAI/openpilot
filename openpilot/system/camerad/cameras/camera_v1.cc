@@ -1592,13 +1592,19 @@ void camerad_thread() {
   LOG("-- v1 camerad starting (VFE PIX DMABUF required; no runtime RDI/MMAP CPU fallback)");
 
   VisionIpcServer v("camerad");
+  const char *no_dcam_env = getenv("NO_DCAM");
+  const bool no_dcam = no_dcam_env != nullptr && strcmp(no_dcam_env, "1") == 0;
+  if (no_dcam) LOG("NO_DCAM enabled: skipping driver camera");
 
   int media_fd = open("/dev/media0", O_RDWR);
   if (media_fd < 0) {
     LOGE("failed to open /dev/media0");
     return;
   }
-  for (int i = 0; i < 3; i++) {
+  for (const auto &config : ALL_CAMERA_CONFIGS) {
+    if (no_dcam && config.stream_type == VISION_STREAM_DRIVER) continue;
+
+    const int i = config.camera_num;
     v1_cams[i] = resolve_cam_config(media_fd, i);
     LOG("cam %d: csiphy=%u csid=%u vfe_pix=%u pix_dev=%d pix_subdev=%d",
         i, v1_cams[i].csiphy_entity, v1_cams[i].csid_entity,
@@ -1610,6 +1616,8 @@ void camerad_thread() {
 
   std::vector<std::unique_ptr<CameraState>> cams;
   for (const auto &config : ALL_CAMERA_CONFIGS) {
+    if (no_dcam && config.stream_type == VISION_STREAM_DRIVER) continue;
+
     auto cam = std::make_unique<CameraState>(config);
     cam->init(&v);
     cams.emplace_back(std::move(cam));
