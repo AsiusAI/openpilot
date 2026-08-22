@@ -375,9 +375,14 @@ def _local_ips() -> list[dict[str, str]]:
     return []
 
 
-def _nmcli(args: list[str], sensitive: bool = False) -> str:
+def _nmcli(args: list[str], sensitive: bool = False, input_text: str | None = None) -> str:
   try:
-    return subprocess.check_output(["sudo", "-n", "nmcli", *args], stderr=subprocess.STDOUT, encoding="utf-8")
+    return subprocess.check_output(
+      ["sudo", "-n", "nmcli", *args],
+      input=input_text,
+      stderr=subprocess.STDOUT,
+      encoding="utf-8",
+    )
   except subprocess.CalledProcessError as e:
     safe_args = args.copy()
     secrets = []
@@ -483,13 +488,11 @@ def _activate_new_wifi_connection(ssid: str, password: str, hidden: bool) -> Non
 
     # Give NetworkManager only the user intent. It completes the connection
     # from the selected AP's capabilities, including its security mode.
-    args = ["--wait", "45"]
-    if password_file is not None:
-      args += ["--passwd-file", password_file.name]
+    args = [*(["--ask"] if password_file is not None else []), "--wait", "45"]
     args += ["device", "wifi", "connect", ssid, "ifname", "wlan0", "name", name]
     if hidden:
       args += ["hidden", "yes"]
-    _nmcli(args)
+    _nmcli(args, sensitive=password_file is not None, input_text=f"{password}\n" if password_file is not None else None)
   except Exception as e:
     _delete_wifi_connections(ssid)
     raise Exception(f"Could not connect to {ssid}. Check the password and hotspot settings.") from e
