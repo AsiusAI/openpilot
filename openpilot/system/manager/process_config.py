@@ -112,7 +112,7 @@ procs = [
   # Keep dmonitoringd alive with NO_DCAM so it can publish a neutral state for controls.
   PythonProcess("dmonitoringd", "openpilot.selfdrive.monitoring.dmonitoringd", driverview, enabled=(WEBCAM or not PC)),
   PythonProcess("qcomgpsd", "openpilot.system.qcomgpsd.qcomgpsd", qcomgps, enabled=COMMA_HARDWARE),
-  PythonProcess("pandad", "openpilot.selfdrive.pandad.pandad", always_run, enabled=not ASIUS_HARDWARE),
+  PythonProcess("pandad", "openpilot.selfdrive.pandad.pandad", always_run, enabled=not PC),
   PythonProcess("paramsd", "openpilot.selfdrive.locationd.paramsd", only_onroad),
   PythonProcess("lagd", "openpilot.selfdrive.locationd.lagd", only_onroad),
   PythonProcess("ubloxd", "openpilot.system.ubloxd.ubloxd", ublox, enabled=COMMA_HARDWARE),
