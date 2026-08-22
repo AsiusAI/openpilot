@@ -130,13 +130,15 @@ class ManagerProcess(ABC):
 
 
 class NativeProcess(ManagerProcess):
-  def __init__(self, name, cwd, cmdline, should_run, enabled=True, sigkill=False):
+  def __init__(self, name, cwd, cmdline, should_run, enabled=True, sigkill=False, restart_delay=0.0):
     self.name = name
     self.cwd = cwd
     self.cmdline = cmdline
     self.should_run = should_run
     self.enabled = enabled
     self.sigkill = sigkill
+    self.restart_delay = restart_delay
+    self.next_start_time = 0.0
     self.launcher = nativelauncher
 
   def start(self) -> None:
@@ -144,7 +146,15 @@ class NativeProcess(ManagerProcess):
     if self.shutting_down:
       self.stop()
 
+    if self.proc is not None and self.proc.exitcode is not None and self.restart_delay > 0.0:
+      exitcode = self.stop()
+      self.next_start_time = time.monotonic() + self.restart_delay
+      cloudlog.warning(f"restarting {self.name} after unexpected exit {exitcode}")
+
     if self.proc is not None:
+      return
+
+    if time.monotonic() < self.next_start_time:
       return
 
     cwd = os.path.join(BASEDIR, self.cwd)

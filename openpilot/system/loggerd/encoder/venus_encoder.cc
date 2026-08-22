@@ -617,6 +617,7 @@ void VenusEncoder::set_bitrate(int bitrate) {
 }
 
 void VenusEncoder::request_keyframe() {
-  if (valid)
-    set_control(V4L2_CID_MPEG_VIDEO_FORCE_KEY_FRAME, 0);
+  // vamOS programs every H.264 I-frame as an IDR and livestream GOPs are only
+  // five frames. Runtime sync-frame requests can crash Dragon's Venus firmware,
+  // so let WebRTC wait at most one GOP for the next periodic IDR.
 }

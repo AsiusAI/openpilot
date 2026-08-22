@@ -80,8 +80,8 @@ procs = [
   DaemonProcess("manage_bluetoothd", "openpilot.system.app.manage_bluetoothd", "BluetoothdPid", enabled=ASIUS_HARDWARE),
 
   NativeProcess("loggerd", "openpilot/system/loggerd", ["./loggerd"], logging),
-  NativeProcess("encoderd", "openpilot/system/loggerd", ["./encoderd"], only_onroad),
-  NativeProcess("stream_encoderd", "openpilot/system/loggerd", ["./encoderd", "--stream"], or_(livestream, notcar)),
+  NativeProcess("encoderd", "openpilot/system/loggerd", ["./encoderd"], only_onroad, restart_delay=5.0),
+  NativeProcess("stream_encoderd", "openpilot/system/loggerd", ["./encoderd", "--stream"], or_(livestream, notcar), restart_delay=5.0),
   PythonProcess("logmessaged", "openpilot.system.logmessaged", always_run),
 
   NativeProcess("camerad", "openpilot/system/camerad", ["./camerad"], or_(driverview, livestream), enabled=not WEBCAM),

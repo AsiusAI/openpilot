@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import os
 import signal
 import time
 from collections.abc import Callable
@@ -201,8 +202,10 @@ class CameraLedBoard:
 
 class CameraLeds:
   def __init__(self) -> None:
-    self.boards = [
-      CameraLedBoard("driver", camera_num=1, bus_num=CAM_LED_BUSES[0]),
+    self.boards = []
+    if os.getenv("NO_DCAM") != "1":
+      self.boards.append(CameraLedBoard("driver", camera_num=1, bus_num=CAM_LED_BUSES[0]))
+    self.boards += [
       CameraLedBoard("road", camera_num=2, bus_num=CAM_LED_BUSES[1]),
       CameraLedBoard("wide", camera_num=3, bus_num=CAM_LED_BUSES[2]),
     ]
