@@ -533,63 +533,29 @@ static Os04VfeWbRegs default_os04_vfe_wb_regs(int cam_idx) {
 
   switch (v1_physical_cam_num(cam_idx)) {
     case 1:
-    case 2:
-    case 3:
       wb.valid = true;
       wb.blue = 0x00cd;
       wb.green = 0x0080;
       wb.red = 0x00e1;
       break;
+    case 2:
+      // CamThink road module, tuned against the comma four OS04 output.
+      wb.valid = true;
+      wb.blue = 0x00b4;
+      wb.green = 0x0080;
+      wb.red = 0x00d2;
+      break;
+    case 3:
+      // CamThink wide module, tuned against the comma four OS04 output.
+      wb.valid = true;
+      wb.blue = 0x00ad;
+      wb.green = 0x0080;
+      wb.red = 0x00d1;
+      break;
     default:
       break;
   }
   return wb;
-}
-
-static float default_os04_target_grey(int cam_idx) {
-  switch (v1_physical_cam_num(cam_idx)) {
-    case 2:
-      return 0.45f;
-    case 3:
-      return 0.38f;
-    default:
-      return 0.48f;
-  }
-}
-
-static int default_os04_awb_range(int cam_idx) {
-  switch (v1_physical_cam_num(cam_idx)) {
-    case 1:
-    case 2:
-    case 3:
-      return 0x80;
-    default:
-      return 0x18;
-  }
-}
-
-static float default_os04_gamma_k(int) {
-  return 7.0f;
-}
-
-static float default_os04_ae_rgb_clip_response(int cam_idx) {
-  switch (v1_physical_cam_num(cam_idx)) {
-    case 2:
-    case 3:
-      return 1.0f;
-    default:
-      return 0.25f;
-  }
-}
-
-static float default_os04_ae_rgb_clip_min_ratio(int cam_idx) {
-  switch (v1_physical_cam_num(cam_idx)) {
-    case 2:
-    case 3:
-      return 0.65f;
-    default:
-      return 0.85f;
-  }
 }
 
 static std::vector<VfeRegWrite> os04_vfe_wb_reg_writes(const Os04VfeWbRegs &wb) {
@@ -603,20 +569,19 @@ static std::vector<VfeRegWrite> os04_vfe_wb_reg_writes(const Os04VfeWbRegs &wb) 
 }
 
 static std::vector<VfeRegWrite> os04_vfe_ccm_reg_writes() {
-  // The CamThink module needs different WB from comma's OS04 module, but no
-  // additional matrix after that correction.
-  static constexpr uint32_t ccm[13] = {
+  // The qcom2 OS04 matrix is not directly compatible with the Dragon VFE
+  // color path. Correct these modules with the per-camera WB gains above and
+  // leave the matrix neutral.
+  static constexpr uint32_t ccm[] = {
     0x00000080, 0x00000000, 0x00000000,
     0x00000000, 0x00000080, 0x00000000,
     0x00000000, 0x00000000, 0x00000080,
     0x00000000, 0x00000000, 0x00000000,
     0x00000000,
   };
-  static constexpr size_t ccm_count = sizeof(ccm) / sizeof(ccm[0]);
-
   std::vector<VfeRegWrite> regs;
-  regs.reserve(ccm_count);
-  for (size_t i = 0; i < ccm_count; i++) {
+  regs.reserve(std::size(ccm));
+  for (size_t i = 0; i < std::size(ccm); i++) {
     regs.push_back({0x760 + (uint32_t)i * 4, ccm[i]});
   }
   return regs;
@@ -645,25 +610,6 @@ static int v1_physical_cam_num(int camera_num) {
   return (camera_num >= 0 && camera_num < 3) ? physical[camera_num] : camera_num;
 }
 
-static std::vector<uint32_t> build_os04_gamma_lut(float k) {
-  std::vector<uint32_t> points;
-  points.reserve(65);
-  for (int i = 0; i < 65; i++) {
-    const float fx = i / 64.0f;
-    const float y = (k * fx) / (1.0f + (k - 1.0f) * fx);
-    points.push_back((uint32_t)(std::clamp(y, 0.0f, 1.0f) * 1023.0f + 0.5f));
-  }
-
-  std::vector<uint32_t> lut;
-  lut.reserve(64);
-  for (int i = 0; i < 64; i++) {
-    const uint32_t base = points[i];
-    const uint32_t delta = points[i + 1] - points[i];
-    lut.push_back(base | (delta << 10));
-  }
-  return lut;
-}
-
 class OneCamera {
 public:
   CameraConfig cc;
@@ -675,9 +621,11 @@ public:
   bool streaming = false;
 
   int n_bufs = 4;
+  std::unique_ptr<VisionBuf[]> vfe_buffers;
 
   uint32_t output_width = 0, output_height = 0;
   uint32_t stride = 0, y_height = 0, uv_height = 0, yuv_size = 0, uv_offset = 0;
+  uint32_t vipc_stride = 0, vipc_y_height = 0, vipc_uv_height = 0, vipc_yuv_size = 0, vipc_uv_offset = 0;
 
   OneCamera(const CameraConfig &config) : cc(config), enabled(true) {}
 
@@ -921,44 +869,27 @@ bool OneCamera::apply_vfe_tuning() {
 }
 
 bool OneCamera::apply_vfe_gamma() {
-  const float k = default_os04_gamma_k(cc.camera_num);
-  const float g_k = k;
-  const float b_k = k;
-  const float r_k = k;
-  std::vector<uint32_t> gamma_g = build_os04_gamma_lut(g_k);
-  std::vector<uint32_t> gamma_b = build_os04_gamma_lut(b_k);
-  std::vector<uint32_t> gamma_r = build_os04_gamma_lut(r_k);
-  struct GammaBank {
-    uint8_t ram_select;
-    const std::vector<uint32_t> *gamma;
-    float k;
-  };
-  const GammaBank banks[] = {
-    {26, &gamma_g, g_k},
-    {28, &gamma_b, b_k},
-    {30, &gamma_r, r_k},
-  };
-  for (const auto &bank : banks) {
+  const uint8_t banks[] = {26, 28, 30};
+  for (const uint8_t bank : banks) {
     VfeDmiCmd cmd = {};
     cmd.dmi_cfg_offset = 0xc24;
-    cmd.ram_select = bank.ram_select;
-    cmd.count = bank.gamma->size();
-    cmd.data = (uint64_t)(uintptr_t)bank.gamma->data();
+    cmd.ram_select = bank;
+    cmd.count = sensor->gamma_lut_rgb.size();
+    cmd.data = (uint64_t)(uintptr_t)sensor->gamma_lut_rgb.data();
     if (v1_ioctl(video_fd, VFE_WRITE_DMI, &cmd) != 0) {
-      LOGE("cam %d: failed to write OS04 gamma DMI ram=%u k=%.2f: %d (%s)",
-           cc.camera_num, bank.ram_select, bank.k, errno, strerror(errno));
+      LOGE("cam %d: failed to write OS04 gamma DMI ram=%u: %d (%s)",
+           cc.camera_num, bank, errno, strerror(errno));
       return false;
     }
   }
 
   if (v1_ioctl(video_fd, VFE_REG_UPDATE) != 0) {
-    LOGE("cam %d: failed to commit OS04 gamma DMI k=%.2f: %d (%s)",
-         cc.camera_num, k, errno, strerror(errno));
+    LOGE("cam %d: failed to commit OS04 gamma DMI: %d (%s)",
+         cc.camera_num, errno, strerror(errno));
     return false;
   }
 
-  LOG("cam %d: wrote OS04 gamma DMI override g=%.2f b=%.2f r=%.2f",
-      cc.camera_num, g_k, b_k, r_k);
+  LOG("cam %d: wrote standard OS04 gamma DMI", cc.camera_num);
   return true;
 }
 
@@ -976,6 +907,9 @@ void OneCamera::camera_open(VisionIpcServer *v) {
   sensor->mipi_format = CAM_FORMAT_MIPI_RAW_10;
   sensor->frame_data_type = CSI_RAW10;
   sensor->frame_stride = sensor->frame_width * 10 / 8;
+  // This RAW10 mode uses HTS=1070, half the qcom2 mode's 2140. Scale EV by
+  // half as much so target-grey calculations represent the same exposure.
+  sensor->ev_scale = 75.0f;
   sensor->exposure_time_max = 4717;
   sensor->analog_gain_max_idx = 0x1e;
   sensor->max_ev = sensor->exposure_time_max * sensor->dc_gain_factor *
@@ -993,11 +927,11 @@ void OneCamera::camera_open(VisionIpcServer *v) {
   output_width = std::max(2U, (sensor->frame_width / output_scale) & ~1U);
   output_height = std::max(2U, (sensor->frame_height / output_scale) & ~1U);
   auto [s, yh, uvh, sz] = get_nv12_info(output_width, output_height);
-  stride = s;
-  y_height = yh;
-  uv_height = uvh;
-  yuv_size = sz;
-  uv_offset = stride * y_height;
+  vipc_stride = stride = s;
+  vipc_y_height = y_height = yh;
+  vipc_uv_height = uv_height = uvh;
+  vipc_yuv_size = yuv_size = sz;
+  vipc_uv_offset = uv_offset = stride * y_height;
 
   // open video device
   int dev = dcfg.pix_video_dev;
@@ -1062,13 +996,21 @@ void OneCamera::camera_open(VisionIpcServer *v) {
   }
   n_bufs = req.count;
 
+  // The Dragon VFE requires a wider native capture stride than the standard
+  // Venus NV12 layout used by comma's VisionIPC consumers. Capture into a
+  // private VFE ring, then publish normalized buffers below.
+  vfe_buffers = std::make_unique<VisionBuf[]>(n_bufs);
+  for (int i = 0; i < n_bufs; i++) {
+    vfe_buffers[i].allocate(yuv_size);
+  }
+
   v->create_buffers_with_sizes(stream_type, VIPC_BUFFER_COUNT,
                                output_width, output_height,
-                               yuv_size, stride, uv_offset);
+                               vipc_yuv_size, vipc_stride, vipc_uv_offset);
 
-  LOG("cam %d: VIPC buffers created (%s, %ux%u, scale=%d, %u bytes, stride=%u)",
+  LOG("cam %d: VIPC buffers created (%s, %ux%u, scale=%d, %u bytes, stride=%u; VFE stride=%u)",
       cam_idx, "VFE PIX V4L2 DMABUF NV12",
-      output_width, output_height, output_scale, yuv_size, stride);
+      output_width, output_height, output_scale, vipc_yuv_size, vipc_stride, stride);
 }
 
 void OneCamera::queue_all_buffers() {
@@ -1131,8 +1073,7 @@ void OneCamera::queue_frame(int index) {
   vbuf.index = index;
   vbuf.length = 1;
   vbuf.m.planes = planes;
-  VisionBuf *vb = vipc_server->get_buffer(stream_type, index);
-  planes[0].m.fd = vb->fd;
+  planes[0].m.fd = vfe_buffers[index].fd;
   planes[0].length = yuv_size;
   int ret = ioctl(video_fd, VIDIOC_QBUF, &vbuf);
   if (ret != 0) LOGE("cam %d: QBUF idx=%d failed: %d (%s)", cc.camera_num, index, errno, strerror(errno));
@@ -1175,16 +1116,20 @@ void OneCamera::camera_close() {
     close(sensor_fd);
     sensor_fd = -1;
   }
+  if (vfe_buffers != nullptr) {
+    for (int i = 0; i < n_bufs; i++) {
+      vfe_buffers[i].free();
+    }
+    vfe_buffers.reset();
+  }
 }
 
 struct Os04AeSample {
   float grey_frac = 0.5f;
-  float rgb_clip_hi_frac = 0.0f;
 };
 
 static constexpr int OS04_AE_HISTORY_SIZE = 4;
 static constexpr int OS04_EXPOSURE_DELAY_FRAMES = 3;
-static constexpr float OS04_AE_MAX_EV_GROWTH_PER_FRAME = 0.10f;
 
 class CameraState {
 public:
@@ -1198,26 +1143,8 @@ public:
   int new_exp_t = 0;
 
   Rect ae_xywh = {};
-  Rect awb_xywh = {};
   float measured_grey_fraction = 0;
   float target_grey_fraction = 0.125;
-  bool awb_enabled = false;
-  int awb_interval = 40;
-  int awb_start_frame = 240;
-  int awb_deadband = 2;
-  int awb_response = 1;
-  int awb_max_step = 2;
-  int awb_y_min = 40;
-  int awb_y_max = 235;
-  int awb_chroma_limit = 24;
-  int awb_min_samples = 64;
-  int awb_blue = 0;
-  int awb_green = 0;
-  int awb_red = 0;
-  int awb_blue_min = 0;
-  int awb_blue_max = 0;
-  int awb_red_min = 0;
-  int awb_red_max = 0;
 
   uint32_t frame_id = 0;
   std::unique_ptr<PubMaster> pm;
@@ -1231,8 +1158,6 @@ public:
   void update_exposure_score(float desired_ev, int exp_t, int exp_g_idx, float exp_gain);
   void set_camera_exposure(const Os04AeSample &ae_sample);
   void set_exposure_rect();
-  void init_awb();
-  void update_awb(const uint8_t *nv12);
 
 };
 
@@ -1252,7 +1177,6 @@ void CameraState::init(VisionIpcServer *v) {
 
   exposure_time = std::clamp(600, camera.sensor->exposure_time_min, camera.sensor->exposure_time_max);
   gain_idx = camera.sensor->analog_gain_rec_idx;
-  target_grey_fraction = default_os04_target_grey(camera.cc.camera_num);
 
   float gain = camera.sensor->sensor_analog_gains[gain_idx];
   current_ev = gain * exposure_time;
@@ -1260,7 +1184,6 @@ void CameraState::init(VisionIpcServer *v) {
   camera.set_exposure(exposure_time, gain_idx);
 
   set_exposure_rect();
-  init_awb();
 }
 
 void CameraState::set_exposure_rect() {
@@ -1273,16 +1196,9 @@ void CameraState::set_exposure_rect() {
     (int)(width * 0.9f),
     (int)(height * 0.75f),
   };
-  awb_xywh = {
-    0,
-    0,
-    width,
-    height,
-  };
 }
 
-static Os04AeSample calculate_os04_ae_sample_nv12(const uint8_t *base, int stride, int uv_offset,
-                                                   Rect ae_xywh, int width, int height,
+static Os04AeSample calculate_os04_ae_sample_nv12(const uint8_t *base, int stride, Rect ae_xywh,
                                                    int x_skip, int y_skip) {
   Os04AeSample ret;
   if (base == nullptr || stride <= 0) return ret;
@@ -1291,33 +1207,12 @@ static Os04AeSample calculate_os04_ae_sample_nv12(const uint8_t *base, int strid
   uint32_t lum_binning[256] = {0};
 
   unsigned int lum_total = 0;
-  unsigned int rgb_clip_total = 0;
-  unsigned int rgb_clip_count = 0;
-  const bool sample_rgb_clip = base != nullptr && stride > 0 && uv_offset > 0 && width > 1 && height > 1;
-  const uint8_t *uv_plane = sample_rgb_clip ? base + uv_offset : nullptr;
 
   for (int y = ae_xywh.y; y < ae_xywh.y + ae_xywh.h; y += y_skip) {
     for (int x = ae_xywh.x; x < ae_xywh.x + ae_xywh.w; x += x_skip) {
       uint8_t lum = base[(y * stride) + x];
       lum_binning[lum]++;
       lum_total += 1;
-
-      if (sample_rgb_clip) {
-        const int x_uv = std::clamp(x & ~1, 0, width - 2);
-        const int y_even = std::clamp(y & ~1, 0, height - 2);
-        const uint8_t *uv = uv_plane + (y_even / 2) * stride + x_uv;
-        // Match the video-range YUV->RGB conversion used by the snapshot path,
-        // otherwise high Y values near 235 look unclipped to AE but clip in RGB.
-        const float yf = 1.164f * ((float)lum - 16.0f);
-        const float uf = (float)uv[0] - 128.0f;
-        const float vf = (float)uv[1] - 128.0f;
-        const float r = std::clamp(yf + 1.596f * vf, 0.0f, 255.0f);
-        const float g = std::clamp(yf - 0.392f * uf - 0.813f * vf, 0.0f, 255.0f);
-        const float b = std::clamp(yf + 2.017f * uf, 0.0f, 255.0f);
-        const float rgb_luma = 0.2126f * r + 0.7152f * g + 0.0722f * b;
-        rgb_clip_count += (rgb_luma >= 250.0f || r >= 255.0f || g >= 255.0f || b >= 255.0f) ? 1 : 0;
-        rgb_clip_total += 1;
-      }
     }
   }
   if (lum_total == 0) return ret;
@@ -1329,153 +1224,7 @@ static Os04AeSample calculate_os04_ae_sample_nv12(const uint8_t *base, int strid
   }
 
   ret.grey_frac = lum_med / 256.0f;
-  ret.rgb_clip_hi_frac = rgb_clip_total > 0 ? (float)rgb_clip_count / (float)rgb_clip_total : 0.0f;
   return ret;
-}
-
-struct Nv12ChromaMedian {
-  bool valid = false;
-  int u = 128;
-  int v = 128;
-  unsigned int samples = 0;
-  unsigned int neutral_samples = 0;
-};
-
-static Nv12ChromaMedian calculate_chroma_median_nv12(const uint8_t *base, int stride, int uv_offset,
-                                                     Rect xywh, int width, int height,
-                                                     int x_skip, int y_skip, int y_min, int y_max,
-                                                     int chroma_limit, unsigned int min_neutral_samples) {
-  Nv12ChromaMedian ret;
-  if (base == nullptr || stride <= 0 || uv_offset <= 0 || width < 2 || height < 2) return ret;
-
-  x_skip = std::max(2, x_skip & ~1);
-  y_skip = std::max(2, y_skip);
-  int x0 = std::clamp(xywh.x, 0, width - 2) & ~1;
-  int x1 = std::clamp(xywh.x + xywh.w, x0 + 2, width);
-  int y0 = std::clamp(xywh.y, 0, height - 2);
-  int y1 = std::clamp(xywh.y + xywh.h, y0 + 2, height);
-
-  y_min = std::clamp(y_min, 0, 255);
-  y_max = std::clamp(y_max, y_min, 255);
-  chroma_limit = std::clamp(chroma_limit, 0, 255);
-
-  uint32_t u_all_hist[256] = {};
-  uint32_t v_all_hist[256] = {};
-  uint32_t u_neutral_hist[256] = {};
-  uint32_t v_neutral_hist[256] = {};
-  unsigned int all_total = 0;
-  unsigned int neutral_total = 0;
-  const uint8_t *uv_plane = base + uv_offset;
-  for (int y = y0; y < y1; y += y_skip) {
-    const uint8_t *row = uv_plane + (y / 2) * stride;
-    for (int x = x0; x + 1 < x1; x += x_skip) {
-      const int y_even = y & ~1;
-      const int avg_y = (base[y_even * stride + x] + base[y_even * stride + x + 1] +
-                         base[(y_even + 1) * stride + x] + base[(y_even + 1) * stride + x + 1] + 2) / 4;
-      if (avg_y < y_min || avg_y > y_max) continue;
-
-      const int u = row[x];
-      const int v = row[x + 1];
-      u_all_hist[u]++;
-      v_all_hist[v]++;
-      all_total++;
-      if (std::abs(u - 128) + std::abs(v - 128) <= chroma_limit) {
-        u_neutral_hist[u]++;
-        v_neutral_hist[v]++;
-        neutral_total++;
-      }
-    }
-  }
-  if (all_total == 0) return ret;
-
-  auto median_from_hist = [](const uint32_t hist[256], unsigned int total) {
-    const unsigned int target = (total + 1) / 2;
-    unsigned int cur = 0;
-    for (int i = 0; i < 256; i++) {
-      cur += hist[i];
-      if (cur >= target) return i;
-    }
-    return 128;
-  };
-
-  const bool use_neutral = neutral_total >= min_neutral_samples;
-  const uint32_t *u_hist = use_neutral ? u_neutral_hist : u_all_hist;
-  const uint32_t *v_hist = use_neutral ? v_neutral_hist : v_all_hist;
-  const unsigned int total = use_neutral ? neutral_total : all_total;
-  ret.valid = true;
-  ret.u = median_from_hist(u_hist, total);
-  ret.v = median_from_hist(v_hist, total);
-  ret.samples = total;
-  ret.neutral_samples = neutral_total;
-  return ret;
-}
-
-void CameraState::init_awb() {
-  if (!camera.enabled) return;
-  const Os04VfeWbRegs wb = default_os04_vfe_wb_regs(camera.cc.camera_num);
-  if (!wb.valid) return;
-
-  awb_interval = 20;
-  awb_start_frame = 40;
-  awb_deadband = 1;
-  awb_response = 4;
-  awb_max_step = 16;
-  awb_y_min = 40;
-  awb_y_max = 235;
-  awb_chroma_limit = 24;
-  awb_min_samples = 64;
-  const int awb_range = default_os04_awb_range(camera.cc.camera_num);
-
-  awb_blue = wb.blue;
-  awb_green = wb.green;
-  awb_red = wb.red;
-  awb_blue_min = std::clamp(awb_blue - awb_range, 0x40, 0x400);
-  awb_blue_max = std::clamp(awb_blue + awb_range, 0x40, 0x400);
-  awb_red_min = std::clamp(awb_red - awb_range, 0x40, 0x400);
-  awb_red_max = std::clamp(awb_red + awb_range, 0x40, 0x400);
-  awb_enabled = true;
-  LOG("cam %d: OS04 AWB enabled start=%d interval=%d deadband=%d response=%d step=%d y=%d-%d chroma=%d min_samples=%d blue=0x%x red=0x%x range=0x%x",
-      camera.cc.camera_num, awb_start_frame, awb_interval, awb_deadband, awb_response, awb_max_step,
-      awb_y_min, awb_y_max, awb_chroma_limit, awb_min_samples, awb_blue, awb_red, awb_range);
-}
-
-void CameraState::update_awb(const uint8_t *nv12) {
-  if (!awb_enabled) return;
-
-  const Nv12ChromaMedian med = calculate_chroma_median_nv12(nv12, camera.stride, camera.uv_offset,
-                                                            awb_xywh, camera.output_width,
-                                                            camera.output_height, 16, 16, awb_y_min,
-                                                            awb_y_max, awb_chroma_limit, awb_min_samples);
-  if (!med.valid) {
-    return;
-  }
-
-  auto step_from_median = [&](int median) {
-    const int err = 128 - median;
-    if (std::abs(err) <= awb_deadband) return 0;
-    return std::clamp(err * awb_response, -awb_max_step, awb_max_step);
-  };
-
-  const int new_blue = std::clamp(awb_blue + step_from_median(med.u), awb_blue_min, awb_blue_max);
-  const int new_red = std::clamp(awb_red + step_from_median(med.v), awb_red_min, awb_red_max);
-  if (new_blue == awb_blue && new_red == awb_red) {
-    return;
-  }
-
-  awb_blue = new_blue;
-  awb_red = new_red;
-  Os04VfeWbRegs wb;
-  wb.valid = true;
-  wb.blue = awb_blue;
-  wb.green = awb_green;
-  wb.red = awb_red;
-  if (!camera.write_vfe_regs(os04_vfe_wb_reg_writes(wb), "AWB")) {
-    awb_enabled = false;
-    LOGE("cam %d: disabling OS04 AWB after VFE write failure", camera.cc.camera_num);
-    return;
-  }
-  LOG("cam %d: OS04 AWB U=%d V=%d samples=%u neutral=%u blue=0x%x red=0x%x", camera.cc.camera_num,
-      med.u, med.v, med.samples, med.neutral_samples, awb_blue, awb_red);
 }
 
 void CameraState::update_exposure_score(float desired_ev, int exp_t, int exp_g_idx, float exp_gain) {
@@ -1503,29 +1252,19 @@ void CameraState::set_camera_exposure(const Os04AeSample &ae_sample) {
   const float cur_ev_ =
       os04_ev_history[(frame_id + OS04_AE_HISTORY_SIZE - OS04_EXPOSURE_DELAY_FRAMES) %
                       OS04_AE_HISTORY_SIZE];
-  const float commanded_ev = exposure_time * sens->sensor_analog_gains[gain_idx];
-  const float new_target_grey = default_os04_target_grey(camera.cc.camera_num);
+  const float scaled_ev = cur_ev_ * sens->ev_scale;
+  const float new_target_grey = std::clamp(
+      0.4f - 0.3f * std::log2(1.0f + sens->target_grey_factor * scaled_ev) / std::log2(6000.0f),
+      0.1f, 0.4f);
   float target_grey = (1.0f - k_grey) * target_grey_fraction + k_grey * new_target_grey;
 
   const float grey_frac = std::clamp(ae_sample.grey_frac, 1.0f / 256.0f, 1.0f);
   float desired_ev = std::clamp(cur_ev_ * target_grey / grey_frac, sens->min_ev, sens->max_ev);
-  if (ae_sample.rgb_clip_hi_frac > 0.0f) {
-    constexpr float clip_limit = 0.08f;
-    if (ae_sample.rgb_clip_hi_frac > clip_limit) {
-      const float response = default_os04_ae_rgb_clip_response(camera.cc.camera_num);
-      const float min_ratio = default_os04_ae_rgb_clip_min_ratio(camera.cc.camera_num);
-      const float clip_ratio = std::clamp(std::pow(clip_limit / ae_sample.rgb_clip_hi_frac, response),
-                                          min_ratio, 1.0f);
-      desired_ev = std::min(desired_ev, cur_ev_ * clip_ratio);
-    } else {
-      // Approach the clipping threshold continuously instead of alternating
-      // between unrestricted gain and a hard cap as samples cross the limit.
-      const float headroom = 1.0f - ae_sample.rgb_clip_hi_frac / clip_limit;
-      desired_ev = std::min(desired_ev, cur_ev_ * (1.0f + OS04_AE_MAX_EV_GROWTH_PER_FRAME * headroom));
-    }
+  float history_ev = 0.0f;
+  for (int i = 0; i < 3; i++) {
+    history_ev += os04_ev_history[(frame_id + OS04_AE_HISTORY_SIZE - 1 - i) % OS04_AE_HISTORY_SIZE] / 3.0f;
   }
-
-  desired_ev = (1.0f - k_ev) * commanded_ev + k_ev * desired_ev;
+  desired_ev = (1.0f - k_ev) * history_ev + k_ev * desired_ev;
 
   best_ev_score = 1e6;
   new_exp_g = 0;
@@ -1557,15 +1296,22 @@ void CameraState::process_pix_frame(int buf_idx, uint64_t timestamp) {
   frame_id++;
   uint64_t timestamp_eof = timestamp + camera.sensor->readout_time_ns;
 
+  VisionBuf *capture = &camera.vfe_buffers[buf_idx];
   VisionBuf *vb = camera.vipc_server->get_buffer(camera.stream_type, buf_idx);
-  if (vb != nullptr) {
-    const bool sample_awb = awb_enabled && frame_id >= (uint32_t)awb_start_frame && frame_id % awb_interval == 0;
-    vb->sync(VISIONBUF_SYNC_FROM_DEVICE);
-    const uint8_t *nv12 = (const uint8_t *)vb->addr;
-    set_camera_exposure(calculate_os04_ae_sample_nv12(nv12, camera.stride, camera.uv_offset,
-                                                      ae_xywh, camera.output_width,
-                                                      camera.output_height, 4, 4));
-    if (sample_awb) update_awb(nv12);
+  if (capture != nullptr && vb != nullptr) {
+    capture->sync(VISIONBUF_SYNC_FROM_DEVICE);
+    const uint8_t *nv12 = (const uint8_t *)capture->addr;
+    set_camera_exposure(calculate_os04_ae_sample_nv12(nv12, camera.stride, ae_xywh, 4, 4));
+
+    uint8_t *published = (uint8_t *)vb->addr;
+    for (uint32_t y = 0; y < camera.output_height; y++) {
+      memcpy(published + y * camera.vipc_stride, nv12 + y * camera.stride, camera.output_width);
+    }
+    for (uint32_t y = 0; y < camera.output_height / 2; y++) {
+      memcpy(published + camera.vipc_uv_offset + y * camera.vipc_stride,
+             nv12 + camera.uv_offset + y * camera.stride, camera.output_width);
+    }
+    vb->sync(VISIONBUF_SYNC_TO_DEVICE);
   }
 
   VisionIpcBufExtra extra = {frame_id, timestamp, timestamp_eof};
