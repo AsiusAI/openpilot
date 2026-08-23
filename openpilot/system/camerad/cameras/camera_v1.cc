@@ -548,9 +548,9 @@ static Os04VfeWbRegs default_os04_vfe_wb_regs(int cam_idx) {
     case 3:
       // CamThink wide module, balanced for the comma four OS04 CCM below.
       wb.valid = true;
-      wb.blue = 0x00b0;
+      wb.blue = 0x00bc;
       wb.green = 0x0080;
-      wb.red = 0x00da;
+      wb.red = 0x00d1;
       break;
     default:
       break;
@@ -612,13 +612,12 @@ static std::vector<VfeRegWrite> os04_vfe_ccm_reg_writes(int cam_idx) {
 static std::vector<VfeRegWrite> os04_vfe_yuv_reg_writes(int cam_idx) {
   if (v1_physical_cam_num(cam_idx) != 3) return {};
 
-  // Start from the comma four OS04 IFE conversion, then apply the calibrated
-  // CamThink-wide color correction in gamma space. This keeps the road camera
-  // untouched and compensates the wide module's different optical response.
+  // Use comma four's OS04 RGB-to-YUV conversion unchanged. Module/lens color
+  // response is compensated by white balance before this conversion.
   static constexpr uint32_t yuv[] = {
     0x00680208, 0x00000108, 0x00400000, 0x03ff0000,
-    0x01db1ee7, 0x00001f53, 0x02000000, 0x03ff0000,
-    0x1fae1e97, 0x000001a1, 0x02000000, 0x03ff0000,
+    0x01c01ed8, 0x00001f68, 0x02000000, 0x03ff0000,
+    0x1fb81e88, 0x000001c0, 0x02000000, 0x03ff0000,
   };
   std::vector<VfeRegWrite> regs;
   regs.reserve(std::size(yuv));
