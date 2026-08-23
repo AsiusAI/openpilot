@@ -546,11 +546,11 @@ static Os04VfeWbRegs default_os04_vfe_wb_regs(int cam_idx) {
       wb.red = 0x00d2;
       break;
     case 3:
-      // CamThink wide module, tuned against the comma four OS04 output.
+      // CamThink wide module, balanced for the comma four OS04 CCM below.
       wb.valid = true;
-      wb.blue = 0x00ad;
+      wb.blue = 0x00b0;
       wb.green = 0x0080;
-      wb.red = 0x00d1;
+      wb.red = 0x00da;
       break;
     default:
       break;
@@ -568,21 +568,62 @@ static std::vector<VfeRegWrite> os04_vfe_wb_reg_writes(const Os04VfeWbRegs &wb) 
   };
 }
 
-static std::vector<VfeRegWrite> os04_vfe_ccm_reg_writes() {
-  // The qcom2 OS04 matrix is not directly compatible with the Dragon VFE
-  // color path. Correct these modules with the per-camera WB gains above and
-  // leave the matrix neutral.
-  static constexpr uint32_t ccm[] = {
+static std::vector<VfeRegWrite> os04_vfe_demosaic_reg_writes(int cam_idx) {
+  if (v1_physical_cam_num(cam_idx) != 3) return {};
+
+  // Match comma four's OS04 IFE state. The Dragon kernel baseline writes the
+  // first interpolation coefficient into all 16 directional slots, while the
+  // comma pipeline leaves the remaining reset-state slots at zero.
+  std::vector<VfeRegWrite> regs = {
+    {0x6f8, 0x00000100},
+    {0x71c, 0x00008000},
+    {0x720, 0x08000066},
+  };
+  for (uint32_t offset = 0x724; offset <= 0x75c; offset += 4) {
+    regs.push_back({offset, 0x00000000});
+  }
+  return regs;
+}
+
+static std::vector<VfeRegWrite> os04_vfe_ccm_reg_writes(int cam_idx) {
+  static constexpr uint32_t identity_ccm[] = {
     0x00000080, 0x00000000, 0x00000000,
     0x00000000, 0x00000080, 0x00000000,
     0x00000000, 0x00000000, 0x00000080,
     0x00000000, 0x00000000, 0x00000000,
     0x00000000,
   };
+  static constexpr uint32_t c4_os04_ccm[] = {
+    0x000000c2, 0x00000fe0, 0x00000fde,
+    0x00000fa7, 0x000000d9, 0x00001000,
+    0x00000fca, 0x00000fef, 0x000000c7,
+    0x00000000, 0x00000000, 0x00000000,
+    0x00000000,
+  };
+  const uint32_t *ccm = v1_physical_cam_num(cam_idx) == 3 ? c4_os04_ccm : identity_ccm;
   std::vector<VfeRegWrite> regs;
-  regs.reserve(std::size(ccm));
-  for (size_t i = 0; i < std::size(ccm); i++) {
+  regs.reserve(std::size(identity_ccm));
+  for (size_t i = 0; i < std::size(identity_ccm); i++) {
     regs.push_back({0x760 + (uint32_t)i * 4, ccm[i]});
+  }
+  return regs;
+}
+
+static std::vector<VfeRegWrite> os04_vfe_yuv_reg_writes(int cam_idx) {
+  if (v1_physical_cam_num(cam_idx) != 3) return {};
+
+  // Start from the comma four OS04 IFE conversion, then apply the calibrated
+  // CamThink-wide color correction in gamma space. This keeps the road camera
+  // untouched and compensates the wide module's different optical response.
+  static constexpr uint32_t yuv[] = {
+    0x00680208, 0x00000108, 0x00400000, 0x03ff0000,
+    0x01db1ee7, 0x00001f53, 0x02000000, 0x03ff0000,
+    0x1fae1e97, 0x000001a1, 0x02000000, 0x03ff0000,
+  };
+  std::vector<VfeRegWrite> regs;
+  regs.reserve(std::size(yuv));
+  for (size_t i = 0; i < std::size(yuv); i++) {
+    regs.push_back({0xf30 + (uint32_t)i * 4, yuv[i]});
   }
   return regs;
 }
@@ -592,8 +633,12 @@ static std::vector<VfeRegWrite> default_os04_vfe_tuning_regs(int cam_idx) {
   std::vector<VfeRegWrite> regs = {{0x050, 0x00000000}};
   std::vector<VfeRegWrite> wb = os04_vfe_wb_reg_writes(default_os04_vfe_wb_regs(cam_idx));
   regs.insert(regs.end(), wb.begin(), wb.end());
-  std::vector<VfeRegWrite> ccm = os04_vfe_ccm_reg_writes();
+  std::vector<VfeRegWrite> demosaic = os04_vfe_demosaic_reg_writes(cam_idx);
+  regs.insert(regs.end(), demosaic.begin(), demosaic.end());
+  std::vector<VfeRegWrite> ccm = os04_vfe_ccm_reg_writes(cam_idx);
   regs.insert(regs.end(), ccm.begin(), ccm.end());
+  std::vector<VfeRegWrite> yuv = os04_vfe_yuv_reg_writes(cam_idx);
+  regs.insert(regs.end(), yuv.begin(), yuv.end());
   return regs;
 }
 
