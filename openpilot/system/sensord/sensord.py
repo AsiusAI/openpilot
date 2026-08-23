@@ -63,7 +63,9 @@ def interrupt_loop(sensors: list[tuple[Sensor, str, bool]], event) -> None:
       offset = cur_offset
       continue
 
-    ts = evd.timestamp - cur_offset
+    # Mainline GPIO event timestamps use CLOCK_MONOTONIC. The Qualcomm kernel
+    # uses CLOCK_REALTIME, which must be converted to the messaging clock.
+    ts = evd.timestamp if ASIUS_HARDWARE else evd.timestamp - cur_offset
     for sensor, service, interrupt in sensors:
       if interrupt:
         try:
