@@ -19,8 +19,9 @@ CAM_LED_BUSES = (16, 18, 20)
 CAM_LED_STATUS_CAMERAS = (2, 3)
 CAM_LED_RETRY_INTERVAL = 5.
 CAM_LED_SYSFS_ROOT = Path("/sys/class/leds")
-CAM_LED_STARTUP_BRIGHTNESS = 204
-CAM_LED_MIN_BRIGHTNESS_PERCENT = 30.
+CAM_LED_STARTUP_BRIGHTNESS = 26
+CAM_LED_MIN_BRIGHTNESS_PERCENT = 5.
+CAM_LED_MAX_BRIGHTNESS_PERCENT = 10.
 CAM_LED_CHANNELS = (
   ("red", 0), ("green", 0), ("blue", 0),
   ("red", 1), ("green", 1), ("blue", 1),
@@ -434,7 +435,7 @@ def camera_led_brightness(sm) -> int:
     else:
       normalized_light = ((light_sensor + 16.) / 116.) ** 3.
 
-    brightness_percent = interp(normalized_light, 0., 1., CAM_LED_MIN_BRIGHTNESS_PERCENT, 100.)
+    brightness_percent = interp(normalized_light, 0., 1., CAM_LED_MIN_BRIGHTNESS_PERCENT, CAM_LED_MAX_BRIGHTNESS_PERCENT)
     return round(255. * brightness_percent / 100.)
 
   return CAM_LED_STARTUP_BRIGHTNESS

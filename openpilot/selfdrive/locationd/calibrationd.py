@@ -44,6 +44,8 @@ if HARDWARE.get_device_type() in ('mici', 'v1'):
 else:
   PITCH_LIMITS = np.array([-0.09074112085129739, 0.17])
 YAW_LIMITS = np.array([-0.06912048084718224, 0.06912048084718235])
+if HARDWARE.get_device_type() == 'v1':
+  YAW_LIMITS += np.radians([-1.0, 1.0])
 DEBUG = os.getenv("DEBUG") is not None
 
 

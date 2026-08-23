@@ -813,7 +813,9 @@ def _live_state_snapshot(sm: messaging.SubMaster, params: Params) -> dict[str, A
   for service in LIVE_STATE_SERVICES:
     try:
       if sm.recv_frame[service] > 0:
-        services[service] = sm[service].to_dict()
+        data = sm[service]
+        services[service] = ([event.to_dict() for event in data]
+                             if service == "onroadEvents" else data.to_dict())
     except Exception:
       cloudlog.exception("athena.live_state.service_failed service=%s", service)
 

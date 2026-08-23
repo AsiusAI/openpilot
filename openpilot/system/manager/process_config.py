@@ -9,6 +9,7 @@ from openpilot.system.manager.process import PythonProcess, NativeProcess, Daemo
 
 WEBCAM = os.getenv("USE_WEBCAM") is not None
 NO_DCAM = os.getenv("NO_DCAM") == "1"
+ASIUS_DISABLE_ROUTE_LOGGING = "/persist/comma/disable_route_logging"
 
 def driverview(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started or params.get_bool("IsDriverViewEnabled")
@@ -20,6 +21,8 @@ def iscar(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and not CP.notCar
 
 def logging(started: bool, params: Params, CP: car.CarParams) -> bool:
+  if ASIUS_HARDWARE and os.path.exists(ASIUS_DISABLE_ROUTE_LOGGING):
+    return False
   run = (not CP.notCar) or not params.get_bool("DisableLogging")
   return started and run
 
@@ -80,7 +83,7 @@ procs = [
   DaemonProcess("manage_bluetoothd", "openpilot.system.app.manage_bluetoothd", "BluetoothdPid", enabled=ASIUS_HARDWARE),
 
   NativeProcess("loggerd", "openpilot/system/loggerd", ["./loggerd"], logging),
-  NativeProcess("encoderd", "openpilot/system/loggerd", ["./encoderd"], only_onroad, restart_delay=5.0),
+  NativeProcess("encoderd", "openpilot/system/loggerd", ["./encoderd"], logging, restart_delay=5.0),
   NativeProcess("stream_encoderd", "openpilot/system/loggerd", ["./encoderd", "--stream"], or_(livestream, notcar), restart_delay=5.0),
   PythonProcess("logmessaged", "openpilot.system.logmessaged", always_run),
 
