@@ -35,6 +35,12 @@ struct CameraConfig {
   bool staggered_sof;  // SOF is staggered (half-period offset) from other cameras
 };
 
+#ifdef __ASIUS_HARDWARE__
+constexpr float ROAD_CAMERA_FOCAL_LENGTH_MM = 3.82f;
+#else
+constexpr float ROAD_CAMERA_FOCAL_LENGTH_MM = 8.0f;
+#endif
+
 // NOTE: to be able to disable road and wide road, we still have to configure the sensor over i2c
 // If you don't do this, the strobe GPIO is an output (even in reset it seems!)
 const CameraConfig WIDE_ROAD_CAMERA_CONFIG = {
@@ -52,10 +58,10 @@ const CameraConfig WIDE_ROAD_CAMERA_CONFIG = {
 
 const CameraConfig NARROW_ROAD_CAMERA_CONFIG = {
   .camera_num = 1,
-  .stream_type = VISION_STREAM_NARROW_ROAD,
-  .focal_len = 8.0,
-  .publish_name = "narrowRoadCameraState",
-  .init_camera_state = &cereal::Event::Builder::initNarrowRoadCameraState,
+  .stream_type = VISION_STREAM_ROAD,
+  .focal_len = ROAD_CAMERA_FOCAL_LENGTH_MM,
+  .publish_name = "roadCameraState",
+  .init_camera_state = &cereal::Event::Builder::initRoadCameraState,
   .enabled = !getenv("DISABLE_ROAD"),
   .phy = CAM_ISP_IFE_IN_RES_PHY_1,
   .vignetting_correction = true,
