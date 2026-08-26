@@ -2,6 +2,8 @@ import os
 import time
 
 from openpilot.cereal import log
+from openpilot.common.hardware import ASIUS_HARDWARE
+from openpilot.system.sensord.sensors.asius_imu import transform_asius_imu
 from openpilot.system.sensord.sensors.i2c_sensor import Sensor
 
 class LSM6DS3_Accel(Sensor):
@@ -79,7 +81,8 @@ class LSM6DS3_Accel(Sensor):
     event.timestamp = ts
     event.source = self.source
     a = event.init('acceleration')
-    a.v = [y, -x, z]
+    xyz = [y, -x, z]
+    a.v = transform_asius_imu(xyz) if ASIUS_HARDWARE else xyz
     return event
 
   def shutdown(self) -> None:
