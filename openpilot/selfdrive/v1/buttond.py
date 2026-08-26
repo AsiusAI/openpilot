@@ -22,13 +22,11 @@ class ButtonAction(Enum):
   PAIR = auto()
 
 
-# TODO: Move pairing to the dedicated GPIO button once panda-v5 hardware is
-# available. PWER is only a temporary input for Dragon bench hardware.
-def find_power_key() -> str | None:
+def find_panda_button() -> str | None:
   for name_path in sorted(glob.glob("/sys/class/input/event*/device/name")):
     try:
       with open(name_path, encoding="utf-8") as f:
-        if f.read().strip() == "pmic_pwrkey":
+        if f.read().strip() == "gpio-keys":
           event_name = name_path.split("/")[-3]
           return f"/dev/input/{event_name}"
     except OSError:
@@ -37,7 +35,7 @@ def find_power_key() -> str | None:
 
 
 @dataclass
-class PowerButton:
+class PandaButton:
   event_device: str | None = None
   hold_seconds: float = PAIR_HOLD_SECONDS
   fd: int | None = None
@@ -52,7 +50,7 @@ class PowerButton:
     if now < self.next_retry:
       return False
 
-    path = self.event_device or find_power_key()
+    path = self.event_device or find_panda_button()
     if path is None:
       self.next_retry = now + RECONNECT_SECONDS
       return False
@@ -139,7 +137,7 @@ def main() -> None:
   signal.signal(signal.SIGINT, sigterm_handler)
   signal.signal(signal.SIGTERM, sigterm_handler)
 
-  button = PowerButton(event_device=args.event_device)
+  button = PandaButton(event_device=args.event_device)
   rk = Ratekeeper(RUNTIME_HZ)
 
   while not done:
