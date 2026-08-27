@@ -375,11 +375,11 @@ def alert_state(sm) -> LedState | None:
 
 
 def calibration_state(sm) -> LedState | None:
-  if not sm.seen['liveCalibration'] or not sm.alive['liveCalibration']:
+  if not sm.seen['extrinsicsCalibration'] or not sm.alive['extrinsicsCalibration']:
     return None
   if not sm.seen['deviceState'] or not sm.alive['deviceState'] or not sm['deviceState'].started:
     return None
-  if sm['liveCalibration'].calStatus != log.LiveCalibrationData.Status.calibrated:
+  if sm['extrinsicsCalibration'].calStatus != log.ExtrinsicsCalibration.Status.calibrated:
     return CALIBRATING
   return None
 
@@ -395,13 +395,13 @@ def steering_utilization(sm) -> float:
   util = 0.
 
   if controls_state.lateralControlState.which() == 'angleState':
-    if sm.seen['carState'] and sm.alive['carState'] and sm.seen['liveParameters'] and sm.alive['liveParameters']:
+    if sm.seen['carState'] and sm.alive['carState'] and sm.seen['vehicleParameters'] and sm.alive['vehicleParameters']:
       car_state = sm['carState']
-      live_parameters = sm['liveParameters']
+      vehicle_parameters = sm['vehicleParameters']
       actual_lateral_accel = controls_state.curvature * car_state.vEgo ** 2
       desired_lateral_accel = controls_state.desiredCurvature * car_state.vEgo ** 2
       accel_diff = desired_lateral_accel - actual_lateral_accel
-      roll_compensation = live_parameters.roll * ACCELERATION_DUE_TO_GRAVITY * interp(car_state.vEgo, 5., 15., 0., 1.)
+      roll_compensation = vehicle_parameters.roll * ACCELERATION_DUE_TO_GRAVITY * interp(car_state.vEgo, 5., 15., 0., 1.)
       lateral_acceleration = actual_lateral_accel - roll_compensation
       max_lateral_acceleration = DEFAULT_MAX_LAT_ACCEL
       if sm.seen['carParams'] and sm['carParams'].maxLateralAccel > 0.:
@@ -537,12 +537,12 @@ def main() -> None:
     'controlsState',
     'deviceState',
     'driverMonitoringState',
-    'liveCalibration',
-    'liveParameters',
+    'extrinsicsCalibration',
     'managerState',
     'pandaStates',
     'roadCameraState',
     'selfdriveState',
+    'vehicleParameters',
     'wideRoadCameraState',
   ], ignore_avg_freq=['managerState'])
   rk = Ratekeeper(RUNTIME_HZ)
