@@ -1392,7 +1392,7 @@ void camerad_thread() {
     return;
   }
   for (const auto &config : ALL_CAMERA_CONFIGS) {
-    if (no_dcam && config.stream_type == VISION_STREAM_DRIVER) continue;
+    if (no_dcam && config.stream_type == VISION_STREAM_CABIN) continue;
 
     const int i = config.camera_num;
     v1_cams[i] = resolve_cam_config(media_fd, i);
@@ -1406,7 +1406,7 @@ void camerad_thread() {
 
   std::vector<std::unique_ptr<CameraState>> cams;
   for (const auto &config : ALL_CAMERA_CONFIGS) {
-    if (no_dcam && config.stream_type == VISION_STREAM_DRIVER) continue;
+    if (no_dcam && config.stream_type == VISION_STREAM_CABIN) continue;
 
     auto cam = std::make_unique<CameraState>(config);
     cam->init(&v);
