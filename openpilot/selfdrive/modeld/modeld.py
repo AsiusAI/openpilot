@@ -240,6 +240,9 @@ class ModelState:
 
   def warmup(self) -> None:
     dummy_frames = {k: np.zeros(self.frame_buf_params[k][3], dtype=np.uint8) for k in self.vision_input_names}
+    # MSM DRM cannot import raw pointers, so stage warmup frames in regular device buffers.
+    for key, frame in dummy_frames.items():
+      self._blob_cache[(key, frame.ctypes.data, None)] = Tensor(frame, device=self.WARP_DEV).contiguous().realize()
     eye = np.eye(3, dtype=np.float32)
     dims = {'desire_pulse': ModelConstants.DESIRE_LEN, 'traffic_convention': 2, 'action_t': 2}
     self.run(dummy_frames, dict.fromkeys(self.vision_input_names, eye), {k: np.zeros(v, dtype=np.float32) for k, v in dims.items()})
