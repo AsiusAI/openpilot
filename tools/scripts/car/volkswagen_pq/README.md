@@ -90,8 +90,93 @@ The Ghidra exports are included for reproducibility. The application uses
 `31` dispatcher is `0x0002F15C`, and the short-adaptation handlers are
 `0x0002F66C` and `0x0002F284`.
 
-This only enables lateral HCA reception in the rack. A separate HCA-related ABS
-change was reported by another retrofit attempt, but the Golf's exact ABS part,
-software, and coding have not yet been captured or verified. Do not write the
-ABS based on this rack procedure. ABS capability for longitudinal ACC braking
-is also a separate issue.
+This only enables lateral HCA reception in the rack. The ABS is not involved in
+accepting steering torque.
+
+## ABS and experimental longitudinal control
+
+Read-only diagnostics identified the Golf's brake controller as:
+
+```text
+part:      1K0 907 379 BJ
+software:  0121
+component: ESP MK60EC1 (H31)
+```
+
+No ABS coding, adaptation, actuator test, or brake request was sent while
+collecting this identity. The
+[comma openpilot Volkswagen-PQ compatibility table](https://github.com/commaai/openpilot/wiki/Volkswagen-PQ)
+lists `1K0 907 379 BJ/BL` H31 as ACC-capable with Follow-to-Stop, but not full
+Stop-and-Go. This establishes a plausible hardware path; it does not establish
+that this particular car is already coded for ACC or that radarless openpilot
+longitudinal control is safe to use.
+
+For this exact BJ/H31 family, the
+[PQ35 MK60EC1 coding notes](https://wiki.pq35.de/Electronics/03-ABS_Brakes/MK60EC1)
+and a [published BJ/H31 retrofit record](https://de.scribd.com/document/692779689/Umruestung-Acc-Final)
+independently identify the ACC selection
+as ABS long-coding Byte 16 Bit 5: `1` means ACC is not installed, and clearing
+it selects ACC. Never copy a complete long-coding string from another car:
+MK60EC1 coding includes VIN, brake, drivetrain, and equipment data.
+Before any possible write, read and save this car's own 18-byte coding, verify
+that Byte 16 Bit 5 is the only intended delta, and prepare the exact original
+value as the rollback.
+
+The utility has a read-only ABS action for that prerequisite:
+
+```bash
+python tools/scripts/car/vw_pq_config.py abs-info
+```
+
+It is limited to `1K0907379BJ` SW `0121`, displays the complete coding and the
+decoded ACC bit, and contains no ABS write operation. Its TP2.0 receiver handles
+all four data opcodes and the 15-bit length field used by MK60EC1; the earlier
+receiver interpreted the application flag as part of the length and could
+misassociate a later response.
+
+The current radarless Golf integration must also not be assumed ready for road
+longitudinal testing. With no stock ACC radar message to copy, `CarState.acc_type`
+currently remains `0` (`Basis_ACC`), while this ABS variant is specifically a
+Follow-to-Stop controller and the PQ DBC defines type `1` for that mode. Stock
+AEB is not preserved by the PQ openpilot-long path. These must be resolved and
+bench/non-actuating validation completed before enabling experimental long.
+
+The engine controller is another prerequisite. Factory retrofit procedures
+change the engine ECU from conventional cruise (GRA) to ACC as well as changing
+the ABS bit; the byte layout is firmware-specific. The comma's cached
+`CarParamsPersistent` contains only the SRS firmware because this legacy Golf's
+other controllers did not answer the normal UDS firmware query, so the exact
+engine part/software is not yet known. Read it over TP2.0 on the next vehicle
+session and verify its documented ACC variant coding. Do not apply the example
+engine Byte 5 change from a different part number.
+
+```bash
+python tools/scripts/car/vw_pq_config.py engine-info
+```
+
+`engine-info`, like `abs-info`, is read-only and prints identity plus the
+controller's current short or long coding when available.
+
+### Required validation order
+
+1. With experimental longitudinal disabled, run `abs-info` and `engine-info`.
+   Save the complete output and independently decode the original values.
+2. Do not write until the ABS Byte 16 delta, exact engine-firmware delta,
+   rollback requests, battery conditions, and diagnostic sessions are all
+   known. A gateway installation-list change is not justified for radarless
+   operation unless logs prove a controller explicitly requires Address 13.
+3. If a coding write is later approved, perform one controller at a time with
+   engine off and ignition on, then power-cycle and read back before proceeding.
+   Clear no DTCs until they have been recorded and understood.
+4. Keep openpilot longitudinal disabled and observe normal manual braking,
+   ABS/ESC warning lamps, stock cruise, engine response, and CAN status first.
+   No actuator test or nonzero acceleration request belongs in this stage.
+5. Only after the integration selects `ACS_Typ_ACC=1`, handles controller
+   faults/status correctly, and explicitly addresses loss of stock AEB should
+   a non-actuating zero/inactive-message test be considered. Any later motion
+   test must start in a controlled area with a driver ready on the brake and
+   must validate positive acceleration separately from commanded deceleration.
+
+Follow-to-Stop is not Stop-and-Go: the H31 compatibility result does not imply
+automatic restart from a standstill. Radarless/vision-only ACC on this Golf is
+an experimental integration, not the documented OEM radar architecture.
