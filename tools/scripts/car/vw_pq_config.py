@@ -21,6 +21,7 @@ SHORT_ADAPTATION_ID = b"\x01\x03"
 SUPPORTED_PART_NUMBER = "1K0909144M"
 SUPPORTED_SOFTWARE = "3201"
 MIN_WRITE_VOLTAGE_MV = 12000
+MAX_WRITE_VOLTAGE_MV = 13000
 WRITE_CONFIRMATION = "ENGINE OFF, IGNITION ON"
 
 
@@ -224,6 +225,18 @@ def workshop_code_for_writing(current: bytes) -> bytes:
   return bytes.fromhex("0181C8003039") if current == bytes(6) else current
 
 
+def require_safe_write_voltage(panda: Panda) -> int:
+  voltage_mv = int(panda.health()["voltage"])
+  if voltage_mv < MIN_WRITE_VOLTAGE_MV:
+    raise DiagnosticError(f"refusing persistent write below {MIN_WRITE_VOLTAGE_MV / 1000:.1f} V")
+  if voltage_mv > MAX_WRITE_VOLTAGE_MV:
+    raise DiagnosticError(
+      f"refusing persistent write above {MAX_WRITE_VOLTAGE_MV / 1000:.1f} V; "
+      "engine may still be running"
+    )
+  return voltage_mv
+
+
 def expect_prefix(response: bytes, prefix: bytes, label: str) -> None:
   if not response.startswith(prefix):
     raise DiagnosticError(f"unexpected {label} response: {response.hex(' ')}")
@@ -325,9 +338,6 @@ def main() -> None:
       return
     if current not in (0, 1):
       raise DiagnosticError(f"refusing to change unexpected Channel 6 value {current}")
-    if voltage_mv < MIN_WRITE_VOLTAGE_MV:
-      raise DiagnosticError(f"refusing persistent write below {MIN_WRITE_VOLTAGE_MV / 1000:.1f} V")
-
     workshop_code = workshop_code_for_writing(identity.workshop_code)
     temporary_request = b"\x31\xb9" + SHORT_ADAPTATION_ID + target.to_bytes(2, "big")
     permanent_request = b"\x31\xbb" + SHORT_ADAPTATION_ID + target.to_bytes(2, "big") + workshop_code
@@ -340,10 +350,12 @@ def main() -> None:
       print("Confirmation did not match; no write sent.")
       return
 
+    print(f"Pre-write voltage: {require_safe_write_voltage(panda) / 1000:.2f} V")
     adaptation.write_temporary(target)
     temporary_value = adaptation.read()
     if temporary_value != target:
       raise DiagnosticError(f"temporary verification failed: requested {target}, read {temporary_value}; permanent write NOT sent")
+    print(f"Pre-commit voltage: {require_safe_write_voltage(panda) / 1000:.2f} V")
     sent = adaptation.write_permanent(target, workshop_code)
     if sent != permanent_request:
       raise AssertionError("permanent request changed unexpectedly")
