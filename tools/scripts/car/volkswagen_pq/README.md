@@ -33,6 +33,24 @@ The sequence is:
 32 B8 01 03                   stop routine
 ```
 
+## Live validation
+
+This sequence was completed successfully on the Golf's `1K0909144M` SW `3201`
+rack. The accepted permanent request was:
+
+```text
+31 BB 01 03 00 01 08 38 00 1C 2D 2D
+```
+
+After a full ignition power cycle, Channel 6 read back as `1` and the rack's
+`LH2_Sta_HCA` state changed from `0` (`DISABLED`) to `3` (`READY`). A subsequent
+road test engaged and disengaged normally, produced nonzero steering torque,
+and completed without a temporary or permanent EPS steering fault.
+
+These observations validate the HCA adaptation procedure for this exact rack
+and software only. They do not establish compatibility with another rack,
+software version, ABS module, or longitudinal-control configuration.
+
 The live disabled response was
 `71 BA 01 03 82 03 00 00 04 25 00 88 FF`; the two-byte Channel 6 value is
 `00 00`. The trailing `00 88` is metadata rather than a channel value or echo.
