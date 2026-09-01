@@ -234,11 +234,13 @@ def parse_channel_value(response: bytes, channel: int) -> int:
   expect_prefix(response, prefix, "adaptation read")
   data = response[len(prefix) :]
 
-  # Exact SW 3201 response constructed by firmware function 0x0002f510:
-  # 82 03 00 <channel> 04 25 <value-hi> <value-lo> FF
-  if len(data) != 9 or data[0:3] != b"\x82\x03\x00" or data[3] != channel or data[4:6] != b"\x04\x25" or data[8] != 0xFF:
+  # Exact SW 3201 response constructed by firmware function 0x0002f510 and
+  # confirmed live for Channel 6:
+  # 82 03 <value-hi> <value-lo> 04 25 <metadata-hi> <metadata-lo> FF
+  # The response does not echo the selected channel.
+  if len(data) != 9 or data[0:2] != b"\x82\x03" or data[4:6] != b"\x04\x25" or data[8] != 0xFF:
     raise DiagnosticError(f"unrecognized Channel {channel} payload: {data.hex(' ')}")
-  return int.from_bytes(data[6:8], "big")
+  return int.from_bytes(data[2:4], "big")
 
 
 class ShortAdaptation:

@@ -33,6 +33,10 @@ The sequence is:
 32 B8 01 03                   stop routine
 ```
 
+The live disabled response was
+`71 BA 01 03 82 03 00 00 04 25 00 88 FF`; the two-byte Channel 6 value is
+`00 00`. The trailing `00 88` is metadata rather than a channel value or echo.
+
 The permanent request format is proven in rack function `0x0002f66c`: `BB`
 passes the two-byte channel value and then exactly six workshop-code bytes to
 the nonvolatile-write path at `0x0002f284`. A persistent write may respond with
