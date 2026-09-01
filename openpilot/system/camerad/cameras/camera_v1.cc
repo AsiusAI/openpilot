@@ -22,6 +22,7 @@
 
 #include "common/params.h"
 #include "common/swaglog.h"
+#include "common/timing.h"
 #include "system/camerad/cameras/hw.h"
 #include "system/camerad/cameras/nv12_info.h"
 #include "system/camerad/sensors/sensor.h"
@@ -1178,6 +1179,7 @@ static constexpr int OS04_EXPOSURE_DELAY_FRAMES = 3;
 class CameraState {
 public:
   OneCamera camera;
+  uint64_t last_frame_ns = 0;
   int exposure_time = 1600;
   int gain_idx = 8;
   float current_ev = 0;
@@ -1382,9 +1384,6 @@ void camerad_thread() {
   LOG("-- v1 camerad starting (VFE PIX DMABUF required; no runtime RDI/MMAP CPU fallback)");
 
   VisionIpcServer v("camerad");
-  const char *no_dcam_env = getenv("NO_DCAM");
-  const bool no_dcam = no_dcam_env != nullptr && strcmp(no_dcam_env, "1") == 0;
-  if (no_dcam) LOG("NO_DCAM enabled: skipping driver camera");
 
   int media_fd = open("/dev/media0", O_RDWR);
   if (media_fd < 0) {
@@ -1392,8 +1391,6 @@ void camerad_thread() {
     return;
   }
   for (const auto &config : ALL_CAMERA_CONFIGS) {
-    if (no_dcam && config.stream_type == VISION_STREAM_CABIN) continue;
-
     const int i = config.camera_num;
     v1_cams[i] = resolve_cam_config(media_fd, i);
     LOG("cam %d: csiphy=%u csid=%u vfe_pix=%u pix_dev=%d pix_subdev=%d",
@@ -1406,8 +1403,6 @@ void camerad_thread() {
 
   std::vector<std::unique_ptr<CameraState>> cams;
   for (const auto &config : ALL_CAMERA_CONFIGS) {
-    if (no_dcam && config.stream_type == VISION_STREAM_CABIN) continue;
-
     auto cam = std::make_unique<CameraState>(config);
     cam->init(&v);
     cams.emplace_back(std::move(cam));
@@ -1427,9 +1422,23 @@ void camerad_thread() {
 
   LOG("-- v1 camerad streaming");
 
+  // Rebuild the complete media and VisionIPC graph when an expected camera
+  // stops producing frames. VisionIPC streams cannot be recreated safely in
+  // place, so returning lets manager restart camerad and re-probe every sensor.
+  // While a flex is disconnected this repeats every thirty seconds; once it is
+  // reconnected, the next camerad start restores the stream without a reboot.
+  constexpr uint64_t camera_reconnect_timeout_ns = 30ULL * 1000 * 1000 * 1000;
+  const uint64_t streaming_started_ns = nanos_since_boot();
+  for (auto &cam : cams) cam->last_frame_ns = streaming_started_ns;
+
   while (!do_exit) {
     for (auto &cam : cams) {
-      if (!cam->camera.enabled) continue;
+      const uint64_t now = nanos_since_boot();
+      if (!cam->camera.enabled || now - cam->last_frame_ns >= camera_reconnect_timeout_ns) {
+        LOGE("cam %d: no frames for 30 seconds; restarting camerad to re-probe hardware",
+             cam->camera.cc.camera_num);
+        return;
+      }
 
       uint64_t timestamp;
       int buf_idx = cam->camera.dequeue_frame(&timestamp);
@@ -1441,6 +1450,7 @@ void camerad_thread() {
         continue;
       }
 
+      cam->last_frame_ns = nanos_since_boot();
       cam->process_pix_frame(buf_idx, timestamp);
       cam->camera.queue_frame(buf_idx);
     }

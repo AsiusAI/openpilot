@@ -7,7 +7,7 @@ from openpilot.selfdrive.v1.buttond import (
   KEY_PROG1,
   KEY_RELEASED,
   ButtonAction,
-  PandaButton,
+  PowerButton,
 )
 
 
@@ -18,7 +18,7 @@ def input_event(value: int) -> bytes:
 def test_pair_after_long_hold():
   read_fd, write_fd = os.pipe()
   try:
-    button = PandaButton(event_device=f"/proc/self/fd/{read_fd}")
+    button = PowerButton(event_device=f"/proc/self/fd/{read_fd}")
     os.write(write_fd, input_event(KEY_PRESSED))
 
     assert button.poll(now=1.0) == []
@@ -37,7 +37,7 @@ def test_pair_after_long_hold():
 def test_short_press_does_not_pair():
   read_fd, write_fd = os.pipe()
   try:
-    button = PandaButton(event_device=f"/proc/self/fd/{read_fd}")
+    button = PowerButton(event_device=f"/proc/self/fd/{read_fd}")
     os.write(write_fd, input_event(KEY_PRESSED))
     assert button.poll(now=1.0) == []
 

@@ -36,7 +36,7 @@ struct CameraConfig {
 };
 
 #ifdef __ASIUS_HARDWARE__
-constexpr float ROAD_CAMERA_FOCAL_LENGTH_MM = 3.82f;
+constexpr float ROAD_CAMERA_FOCAL_LENGTH_MM = 3.6f;
 #else
 constexpr float ROAD_CAMERA_FOCAL_LENGTH_MM = 8.0f;
 #endif
