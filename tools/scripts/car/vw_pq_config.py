@@ -148,6 +148,14 @@ class Tp20Transport:
     if len(timing) != 6 or timing[0] != 0xA1:
       raise DiagnosticError(f"unexpected TP2.0 timing response: {timing.hex(' ')}")
 
+  def close(self) -> None:
+    if self.tx_address:
+      try:
+        self._send_can(b"\xa8")
+      except Exception:
+        pass
+      self.tx_address = 0
+
   def send(self, data: bytes) -> None:
     if len(data) > 0xFF:
       raise ValueError("TP2.0 payload is limited to 255 bytes")
@@ -198,7 +206,7 @@ class KwpClient:
     self.transport = transport
     self.debug = debug
 
-  def request(self, request: bytes, pending_timeout: float = 10.0) -> bytes:
+  def request(self, request: bytes, pending_timeout: float = 10.0, busy_retries: int = 0) -> bytes:
     if self.debug:
       print(f"KWP TX: {request.hex(' ')}")
     self.transport.send(request)
@@ -214,6 +222,11 @@ class KwpClient:
       if self.debug:
         print(f"KWP RX: {response.hex(' ')}")
       if response == bytes([0x7F, request[0], 0x78]) and time.monotonic() < deadline:
+        continue
+      if response == bytes([0x7F, request[0], 0x21]) and busy_retries > 0:
+        busy_retries -= 1
+        time.sleep(0.1)
+        self.transport.send(request)
         continue
       if response[:1] == b"\x7f":
         raise NegativeResponseError(response)
@@ -267,6 +280,13 @@ def parse_long_coding(response: bytes) -> LongCoding:
   coding = bytes(data[12 : 11 + record_length])
   checksum = data[11 + record_length]
   return LongCoding(value=coding, checksum=checksum, raw=data)
+
+
+def read_did(kwp: KwpClient, identifier: int) -> bytes:
+  did = identifier.to_bytes(2, "big")
+  response = kwp.request(b"\x22" + did)
+  expect_prefix(response, b"\x62" + did, f"DID 0x{identifier:04X}")
+  return response[3:]
 
 
 def workshop_code_for_writing(current: bytes) -> bytes:
@@ -367,9 +387,27 @@ def main() -> None:
     "engine-info": ENGINE_LOGICAL_ADDRESS,
   }.get(args.action, EPS_LOGICAL_ADDRESS)
   transport = Tp20Transport(panda, module, args.bus, debug=args.debug)
+  atexit.register(transport.close)
   kwp = KwpClient(transport, debug=args.debug)
-  session = kwp.request(b"\x10\x89")
+  session = kwp.request(b"\x10\x89", busy_retries=5)
   expect_prefix(session, b"\x50\x89", "diagnostic session")
+
+  if args.action == "abs-info":
+    part_number = read_did(kwp, 0xF187).decode("latin-1").strip(" \x00")
+    software = read_did(kwp, 0xF189).decode("latin-1").strip(" \x00")
+    component = read_did(kwp, 0xF197).decode("latin-1").strip(" \x00")
+    print(f"ABS: {part_number} SW {software} ({component})")
+    if part_number != SUPPORTED_ABS_PART_NUMBER or software != SUPPORTED_ABS_SOFTWARE:
+      raise DiagnosticError(f"unsupported ABS {part_number!r} SW {software!r}; expected {SUPPORTED_ABS_PART_NUMBER} SW {SUPPORTED_ABS_SOFTWARE}")
+    coding = read_did(kwp, 0x0600)
+    print(f"Long coding ({len(coding)} bytes): {coding.hex().upper()}")
+    if len(coding) <= 16:
+      raise DiagnosticError(f"long coding is too short to contain Byte 16: {len(coding)} bytes")
+    acc_not_installed = bool(coding[16] & (1 << 5))
+    print(f"Byte 16: {coding[16]:02X}; Bit 5: {int(acc_not_installed)}")
+    print(f"ACC coding state: {'NOT INSTALLED' if acc_not_installed else 'INSTALLED'}")
+    print("Read-only: no adaptation or coding write was sent.")
+    return
 
   identity = parse_identity(kwp.request(b"\x1a\x9b"))
   if args.action == "engine-info":
@@ -384,21 +422,6 @@ def main() -> None:
       print(f"Short coding: {identity.raw[17:20].hex().upper()}")
     else:
       print(f"Unknown coding record type: {coding_type:02X}")
-    print("Read-only: no adaptation or coding write was sent.")
-    return
-
-  if args.action == "abs-info":
-    print(f"ABS: {identity.part_number} SW {identity.software} ({identity.component})")
-    print(f"Current workshop code: {identity.workshop_code.hex(' ')}")
-    validate_abs_identity(identity)
-    coding = parse_long_coding(kwp.request(b"\x1a\x9a"))
-    print(f"Long coding ({len(coding.value)} bytes): {coding.value.hex().upper()}")
-    print(f"Coding record checksum: {coding.checksum:02X}")
-    if len(coding.value) <= 16:
-      raise DiagnosticError(f"long coding is too short to contain Byte 16: {len(coding.value)} bytes")
-    acc_not_installed = bool(coding.value[16] & (1 << 5))
-    print(f"Byte 16: {coding.value[16]:02X}; Bit 5: {int(acc_not_installed)}")
-    print(f"ACC coding state: {'NOT INSTALLED' if acc_not_installed else 'INSTALLED'}")
     print("Read-only: no adaptation or coding write was sent.")
     return
 

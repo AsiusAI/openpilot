@@ -101,6 +101,7 @@ Read-only diagnostics identified the Golf's brake controller as:
 part:      1K0 907 379 BJ
 software:  0121
 component: ESP MK60EC1 (H31)
+coding:    143B400D112800FB281402E7881F0040350000
 ```
 
 No ABS coding, adaptation, actuator test, or brake request was sent while
@@ -118,7 +119,9 @@ independently identify the ACC selection
 as ABS long-coding Byte 16 Bit 5: `1` means ACC is not installed, and clearing
 it selects ACC. Never copy a complete long-coding string from another car:
 MK60EC1 coding includes VIN, brake, drivetrain, and equipment data.
-Before any possible write, read and save this car's own 18-byte coding, verify
+The live read returned 19 coding bytes. Byte 16 is `0x35`, so Bit 5 is `1` and
+the controller is currently coded with ACC not installed. Before any possible
+write, preserve this exact original value, verify
 that Byte 16 Bit 5 is the only intended delta, and prepare the exact original
 value as the rollback.
 
@@ -141,13 +144,24 @@ Follow-to-Stop controller and the PQ DBC defines type `1` for that mode. Stock
 AEB is not preserved by the PQ openpilot-long path. These must be resolved and
 bench/non-actuating validation completed before enabling experimental long.
 
-The engine controller is another prerequisite. Factory retrofit procedures
+The engine controller was also identified read-only:
+
+```text
+part:      03C 906 016 AJ
+software:  9458
+component: MED17.5.5 G (CAXA 1.4 TSI)
+coding:    00004D (short coding)
+```
+
+Factory retrofit procedures
 change the engine ECU from conventional cruise (GRA) to ACC as well as changing
-the ABS bit; the byte layout is firmware-specific. The comma's cached
-`CarParamsPersistent` contains only the SRS firmware because this legacy Golf's
-other controllers did not answer the normal UDS firmware query, so the exact
-engine part/software is not yet known. Read it over TP2.0 on the next vehicle
-session and verify its documented ACC variant coding. Do not apply the example
+the ABS bit; the byte layout is firmware-specific. A Golf VI retrofit report
+for this exact `03C906016AJ` MED17.5.5 family says the ECU raises a powertrain
+variant error when ACC traffic is introduced unless a tuner enables ACC message
+reception in the engine firmware. Community reverse engineering likewise says
+MED17.5.5 can be patched for ACC. This points to a firmware feature patch rather
+than a safe short-coding-only change. Obtain or derive and verify a patch for
+software `9458`; do not flash another MED17.5.5 version or apply the example
 engine Byte 5 change from a different part number.
 
 ```bash
@@ -180,3 +194,12 @@ controller's current short or long coding when available.
 Follow-to-Stop is not Stop-and-Go: the H31 compatibility result does not imply
 automatic restart from a standstill. Radarless/vision-only ACC on this Golf is
 an experimental integration, not the documented OEM radar architecture.
+
+Later H31 testing reported a more specific standstill limitation: MK60EC1 can
+brake to zero but drops brake pressure rather than holding it indefinitely when
+stopped through the TSK/`ACS_Anhaltewunsch` path. The engine then requests
+braking again, potentially creating a release/re-brake cycle. Treat H31 as
+mandatory driver brake takeover at the stop. Initial openpilot-long support
+must disengage or hand over before standstill and must not advertise auto-hold,
+Stop-and-Go, or auto-resume. The moving-speed controller can be evaluated
+separately only after the ABS and engine prerequisites are satisfied.

@@ -15,7 +15,7 @@ if "opendbc.car.structs" not in sys.modules:
   structs.CarParams = SimpleNamespace(SafetyModel=SimpleNamespace(allOutput=0, noOutput=0))
   sys.modules.update({"opendbc": opendbc, "opendbc.car": car, "opendbc.car.structs": structs})
 
-from tools.scripts.car.vw_pq_config import Tp20Transport, parse_identity, parse_long_coding
+from tools.scripts.car.vw_pq_config import KwpClient, Tp20Transport, parse_identity, parse_long_coding, read_did
 
 
 def transport_with_frames(frames):
@@ -68,3 +68,31 @@ def test_parse_identity_masks_long_coding_flag_from_software():
   assert identity.part_number == "1K0907379BJ"
   assert identity.software == "0121"
   assert identity.component == "ESP MK60EC1"
+
+
+def test_kwp_retries_busy_response_only_when_requested(monkeypatch):
+  class FakeTransport:
+    def __init__(self):
+      self.responses = [b"\x7f\x10\x21", b"\x7f\x10\x21", b"\x50\x89"]
+      self.sent = []
+
+    def send(self, request):
+      self.sent.append(request)
+
+    def recv(self):
+      return self.responses.pop(0)
+
+  monkeypatch.setattr("tools.scripts.car.vw_pq_config.time.sleep", lambda _: None)
+  transport = FakeTransport()
+
+  assert KwpClient(transport).request(b"\x10\x89", busy_retries=2) == b"\x50\x89"
+  assert transport.sent == [b"\x10\x89"] * 3
+
+
+def test_read_did_returns_data_after_echo():
+  class FakeKwp:
+    def request(self, request):
+      assert request == b"\x22\x06\x00"
+      return b"\x62\x06\x00\x14\x3b\x40"
+
+  assert read_did(FakeKwp(), 0x0600) == b"\x14\x3b\x40"
