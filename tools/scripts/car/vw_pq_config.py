@@ -108,6 +108,18 @@ class Tp20Transport:
     self.panda.can_send(target, data, self.bus, timeout=max(10, int(self.timeout * 1000)))
     time.sleep(self.packet_delay)
 
+  def _recv_tp20(self) -> bytes:
+    while True:
+      frame = self._recv_can()
+      # A3 is a TP2.0 keepalive/request-more control frame. It can arrive
+      # between an application frame and its ACK/response, especially after
+      # waiting for operator confirmation, and carries no application data.
+      if frame == b"\xa3":
+        continue
+      if frame == b"\xa8":
+        raise DiagnosticError("TP2.0 channel disconnected by ECU")
+      return frame
+
   def _open_channel(self, module: int) -> None:
     # Request receive address 0x300; the ECU supplies its transmit address.
     self._send_can(bytes([module, 0xC0, 0x00, 0x10, 0x00, 0x03, 0x01]), self.BROADCAST_ADDRESS)
@@ -136,7 +148,7 @@ class Tp20Transport:
       self._send_can(frame)
       if final:
         expected_ack = bytes([0xB0 | ((self.tx_sequence + 1) & 0xF)])
-        actual_ack = self._recv_can()
+        actual_ack = self._recv_tp20()
         if actual_ack != expected_ack:
           raise DiagnosticError(f"unexpected TP2.0 ACK: {actual_ack.hex(' ')}")
       self.tx_sequence = (self.tx_sequence + 1) & 0xF
@@ -145,7 +157,7 @@ class Tp20Transport:
   def recv(self) -> bytes:
     payload = bytearray()
     while True:
-      frame = self._recv_can()
+      frame = self._recv_tp20()
       if not frame:
         continue
       frame_type = frame[0] >> 4
