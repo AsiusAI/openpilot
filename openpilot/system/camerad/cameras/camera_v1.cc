@@ -520,8 +520,6 @@ static bool write_sensor_regs(int sensor_fd, const std::vector<i2c_random_wr_pay
   return true;
 }
 
-static int v1_physical_cam_num(int camera_num);
-
 struct Os04VfeWbRegs {
   bool valid = false;
   int blue = 0;
@@ -529,34 +527,11 @@ struct Os04VfeWbRegs {
   int red = 0;
 };
 
-static Os04VfeWbRegs default_os04_vfe_wb_regs(int cam_idx) {
-  Os04VfeWbRegs wb;
-
-  switch (v1_physical_cam_num(cam_idx)) {
-    case 1:
-      wb.valid = true;
-      wb.blue = 0x00cd;
-      wb.green = 0x0080;
-      wb.red = 0x00e1;
-      break;
-    case 2:
-      // CamThink road module, tuned against the comma four OS04 output.
-      wb.valid = true;
-      wb.blue = 0x00b4;
-      wb.green = 0x0080;
-      wb.red = 0x00d2;
-      break;
-    case 3:
-      // CamThink wide module, balanced for the comma four OS04 CCM below.
-      wb.valid = true;
-      wb.blue = 0x00bc;
-      wb.green = 0x0080;
-      wb.red = 0x00d1;
-      break;
-    default:
-      break;
-  }
-  return wb;
+static Os04VfeWbRegs default_os04_vfe_wb_regs(int) {
+  // The CamThink modules need input correction before comma's OS04 CCM/YUV
+  // pipeline. Unity WB, as used with comma's own modules, produces a strong
+  // green cast on this hardware. Use one correction for all three modules.
+  return {.valid = true, .blue = 0x00bc, .green = 0x0080, .red = 0x00d1};
 }
 
 static std::vector<VfeRegWrite> os04_vfe_wb_reg_writes(const Os04VfeWbRegs &wb) {
@@ -569,9 +544,7 @@ static std::vector<VfeRegWrite> os04_vfe_wb_reg_writes(const Os04VfeWbRegs &wb) 
   };
 }
 
-static std::vector<VfeRegWrite> os04_vfe_demosaic_reg_writes(int cam_idx) {
-  if (v1_physical_cam_num(cam_idx) != 3) return {};
-
+static std::vector<VfeRegWrite> os04_vfe_demosaic_reg_writes(int) {
   // Match comma four's OS04 IFE state. The Dragon kernel baseline writes the
   // first interpolation coefficient into all 16 directional slots, while the
   // comma pipeline leaves the remaining reset-state slots at zero.
@@ -586,14 +559,7 @@ static std::vector<VfeRegWrite> os04_vfe_demosaic_reg_writes(int cam_idx) {
   return regs;
 }
 
-static std::vector<VfeRegWrite> os04_vfe_ccm_reg_writes(int cam_idx) {
-  static constexpr uint32_t identity_ccm[] = {
-    0x00000080, 0x00000000, 0x00000000,
-    0x00000000, 0x00000080, 0x00000000,
-    0x00000000, 0x00000000, 0x00000080,
-    0x00000000, 0x00000000, 0x00000000,
-    0x00000000,
-  };
+static std::vector<VfeRegWrite> os04_vfe_ccm_reg_writes(int) {
   static constexpr uint32_t c4_os04_ccm[] = {
     0x000000c2, 0x00000fe0, 0x00000fde,
     0x00000fa7, 0x000000d9, 0x00001000,
@@ -601,18 +567,15 @@ static std::vector<VfeRegWrite> os04_vfe_ccm_reg_writes(int cam_idx) {
     0x00000000, 0x00000000, 0x00000000,
     0x00000000,
   };
-  const uint32_t *ccm = v1_physical_cam_num(cam_idx) == 3 ? c4_os04_ccm : identity_ccm;
   std::vector<VfeRegWrite> regs;
-  regs.reserve(std::size(identity_ccm));
-  for (size_t i = 0; i < std::size(identity_ccm); i++) {
-    regs.push_back({0x760 + (uint32_t)i * 4, ccm[i]});
+  regs.reserve(std::size(c4_os04_ccm));
+  for (size_t i = 0; i < std::size(c4_os04_ccm); i++) {
+    regs.push_back({0x760 + (uint32_t)i * 4, c4_os04_ccm[i]});
   }
   return regs;
 }
 
-static std::vector<VfeRegWrite> os04_vfe_yuv_reg_writes(int cam_idx) {
-  if (v1_physical_cam_num(cam_idx) != 3) return {};
-
+static std::vector<VfeRegWrite> os04_vfe_yuv_reg_writes(int) {
   // Use comma four's OS04 RGB-to-YUV conversion unchanged. Module/lens color
   // response is compensated by white balance before this conversion.
   static constexpr uint32_t yuv[] = {
@@ -649,12 +612,6 @@ static bool apply_os04_20fps_timing(int sensor_fd, int cam_idx) {
   }, "20fps timing", cam_idx);
 }
 
-static int v1_physical_cam_num(int camera_num) {
-  // openpilot camera_num 0/1/2 maps to physical CAM3/CAM2/CAM1.
-  static const int physical[] = {3, 2, 1};
-  return (camera_num >= 0 && camera_num < 3) ? physical[camera_num] : camera_num;
-}
-
 class OneCamera {
 public:
   CameraConfig cc;
@@ -672,7 +629,7 @@ public:
   uint32_t stride = 0, y_height = 0, uv_height = 0, yuv_size = 0, uv_offset = 0;
   uint32_t vipc_stride = 0, vipc_y_height = 0, vipc_uv_height = 0, vipc_yuv_size = 0, vipc_uv_offset = 0;
 
-  OneCamera(const CameraConfig &config) : cc(config), enabled(true) {}
+  OneCamera(const CameraConfig &config) : cc(config), enabled(config.enabled) {}
 
   void camera_open(VisionIpcServer *v);
   void camera_close();
@@ -1194,7 +1151,6 @@ public:
 
   uint32_t frame_id = 0;
   std::unique_ptr<PubMaster> pm;
-  float fl_pix = 0;
 
   CameraState(const CameraConfig &config) : camera(config) {}
   ~CameraState() { camera.camera_close(); }
@@ -1218,7 +1174,6 @@ void CameraState::init(VisionIpcServer *v) {
     frame_id = 1;
   }
 
-  fl_pix = camera.cc.focal_len / camera.sensor->pixel_size_mm;
   pm = std::make_unique<PubMaster>(std::vector{camera.cc.publish_name});
 
   exposure_time = std::clamp(600, camera.sensor->exposure_time_min, camera.sensor->exposure_time_max);
@@ -1391,6 +1346,8 @@ void camerad_thread() {
     return;
   }
   for (const auto &config : ALL_CAMERA_CONFIGS) {
+    if (!config.enabled) continue;
+
     const int i = config.camera_num;
     v1_cams[i] = resolve_cam_config(media_fd, i);
     LOG("cam %d: csiphy=%u csid=%u vfe_pix=%u pix_dev=%d pix_subdev=%d",
@@ -1403,6 +1360,8 @@ void camerad_thread() {
 
   std::vector<std::unique_ptr<CameraState>> cams;
   for (const auto &config : ALL_CAMERA_CONFIGS) {
+    if (!config.enabled) continue;
+
     auto cam = std::make_unique<CameraState>(config);
     cam->init(&v);
     cams.emplace_back(std::move(cam));

@@ -36,7 +36,7 @@ struct CameraConfig {
 };
 
 #ifdef __ASIUS_HARDWARE__
-constexpr float ROAD_CAMERA_FOCAL_LENGTH_MM = 3.6f;
+constexpr float ROAD_CAMERA_FOCAL_LENGTH_MM = 4.35f;
 #else
 constexpr float ROAD_CAMERA_FOCAL_LENGTH_MM = 8.0f;
 #endif
@@ -75,7 +75,7 @@ const CameraConfig CABIN_CAMERA_CONFIG = {
   .focal_len = 1.71,
   .publish_name = "cabinCameraState",
   .init_camera_state = &cereal::Event::Builder::initCabinCameraState,
-  .enabled = !getenv("DISABLE_DRIVER"),
+  .enabled = !getenv("DISABLE_DRIVER") && !getenv("NO_DCAM"),
   .phy = CAM_ISP_IFE_IN_RES_PHY_2,
   .vignetting_correction = false,
   .output_type = ISP_BPS_PROCESSED,
