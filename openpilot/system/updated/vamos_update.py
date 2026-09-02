@@ -48,7 +48,7 @@ def run_vamos_update(cmd: list[str]) -> str:
 
 def prepare_vamos_update(overlay_merged: str, current_version: str,
                          set_consistent_flag: Callable[[bool], None]) -> bool:
-  manifest_path = Path(overlay_merged) / "openpilot/system/hardware/v1/vamos.json"
+  manifest_path = Path(overlay_merged) / "openpilot/system/hardware/v0/vamos.json"
   with manifest_path.open() as manifest_file:
     updated_version = str(json.load(manifest_file)["version"])
 

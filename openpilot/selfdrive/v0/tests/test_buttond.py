@@ -1,6 +1,6 @@
 import os
 
-from openpilot.selfdrive.v1.buttond import (
+from openpilot.selfdrive.v0.buttond import (
   EV_KEY,
   INPUT_EVENT,
   KEY_PRESSED,

@@ -43,7 +43,7 @@ struct OneCamRoute {
 // openpilot camera_num 0 is wide road, camera_num 1 is road,
 // camera_num 2 is driver. For Asius v0:
 //   CAM1 -> driver, CAM2 -> road, CAM3 -> wide road.
-struct V1CamConfig {
+struct V0CamConfig {
   uint32_t csiphy_entity;
   uint32_t csid_entity;
   uint32_t vfe_pix_entity;
@@ -72,14 +72,14 @@ static uint32_t find_media_entity(int media_fd, const char *name) {
   return 0;
 }
 
-static V1CamConfig resolve_cam_config(int media_fd, int cam_idx) {
+static V0CamConfig resolve_cam_config(int media_fd, int cam_idx) {
   static const OneCamRoute routing[] = {
     {3, 1, 1, "os04c10 20-0036"},
     {2, 0, 0, "os04c10 18-0036"},
     {0, 2, 2, "os04c10 16-0036"},
   };
   const auto *r = &routing[cam_idx];
-  V1CamConfig cfg = {};
+  V0CamConfig cfg = {};
   cfg.pix_video_dev = -1;
   cfg.csiphy_subdev = -1;
   cfg.csid_subdev = -1;
@@ -96,7 +96,7 @@ static V1CamConfig resolve_cam_config(int media_fd, int cam_idx) {
   return cfg;
 }
 
-static V1CamConfig v1_cams[3];
+static V0CamConfig v0_cams[3];
 
 
 struct OneSensorRegWrite {
@@ -137,7 +137,7 @@ struct VfeDmiCmd {
 #define VFE_WRITE_DMI _IOW(VFE_IOC_MAGIC, 2, struct VfeDmiCmd)
 #define VFE_REG_UPDATE _IO(VFE_IOC_MAGIC, 6)
 
-static int v1_ioctl(int fd, unsigned long request, void *arg = nullptr) {
+static int v0_ioctl(int fd, unsigned long request, void *arg = nullptr) {
   int ret;
   int try_cnt = 0;
   do {
@@ -706,7 +706,7 @@ void OneCamera::setup_media_links() {
   }
 
   int cam_idx = cc.camera_num;
-  auto &dcfg = v1_cams[cam_idx];
+  auto &dcfg = v0_cams[cam_idx];
 
   struct media_link_desc link = {};
 
@@ -733,7 +733,7 @@ void OneCamera::setup_media_links() {
 
 void OneCamera::set_formats() {
   int cam_idx = cc.camera_num;
-  auto &dcfg = v1_cams[cam_idx];
+  auto &dcfg = v0_cams[cam_idx];
   constexpr uint32_t media_bus_code = MEDIA_BUS_FMT_SBGGR10_1X10;
   // set format on CSIPHY subdev
   int csiphy_fd = open(util::string_format("/dev/v4l-subdev%d", dcfg.csiphy_subdev).c_str(), O_RDWR);
@@ -848,7 +848,7 @@ bool OneCamera::write_vfe_regs(const std::vector<VfeRegWrite> &regs, const char 
     VfeWriteRegsCmd cmd = {};
     cmd.regs = (uint64_t)(uintptr_t)(regs.data() + offset);
     cmd.count = count;
-    if (v1_ioctl(video_fd, VFE_WRITE_REGS, &cmd) != 0) {
+    if (v0_ioctl(video_fd, VFE_WRITE_REGS, &cmd) != 0) {
       LOGE("cam %d: failed to write %s VFE regs offset=%zu count=%zu: %d (%s)",
            cc.camera_num, name, offset, count, errno, strerror(errno));
       return false;
@@ -856,7 +856,7 @@ bool OneCamera::write_vfe_regs(const std::vector<VfeRegWrite> &regs, const char 
     offset += count;
   }
 
-  if (v1_ioctl(video_fd, VFE_REG_UPDATE) != 0) {
+  if (v0_ioctl(video_fd, VFE_REG_UPDATE) != 0) {
     LOGE("cam %d: failed to commit %s VFE regs: %d (%s)",
          cc.camera_num, name, errno, strerror(errno));
     return false;
@@ -878,14 +878,14 @@ bool OneCamera::apply_vfe_gamma() {
     cmd.ram_select = bank;
     cmd.count = sensor->gamma_lut_rgb.size();
     cmd.data = (uint64_t)(uintptr_t)sensor->gamma_lut_rgb.data();
-    if (v1_ioctl(video_fd, VFE_WRITE_DMI, &cmd) != 0) {
+    if (v0_ioctl(video_fd, VFE_WRITE_DMI, &cmd) != 0) {
       LOGE("cam %d: failed to write OS04 gamma DMI ram=%u: %d (%s)",
            cc.camera_num, bank, errno, strerror(errno));
       return false;
     }
   }
 
-  if (v1_ioctl(video_fd, VFE_REG_UPDATE) != 0) {
+  if (v0_ioctl(video_fd, VFE_REG_UPDATE) != 0) {
     LOGE("cam %d: failed to commit OS04 gamma DMI: %d (%s)",
          cc.camera_num, errno, strerror(errno));
     return false;
@@ -902,7 +902,7 @@ void OneCamera::camera_open(VisionIpcServer *v) {
   stream_type = cc.stream_type;
 
   int cam_idx = cc.camera_num;
-  auto &dcfg = v1_cams[cam_idx];
+  auto &dcfg = v0_cams[cam_idx];
   sensor = std::make_unique<OS04C10>();
   LOG("cam %d: using OS04C10 RAW10 media path", cam_idx);
   sensor->bits_per_pixel = 10;
@@ -1167,7 +1167,7 @@ void CameraState::init(VisionIpcServer *v) {
   camera.camera_open(v);
   if (!camera.enabled) return;
 
-  // The v1 starts the road sensor first, then wide almost one period later.
+  // The v0 starts the road sensor first, then wide almost one period later.
   // Number wide one frame ahead so same-numbered road/wide frames refer to the
   // same 20 Hz capture instant.
   if (camera.cc.stream_type == VISION_STREAM_WIDE_ROAD) {
@@ -1336,7 +1336,7 @@ void CameraState::process_pix_frame(int buf_idx, uint64_t timestamp) {
 }
 
 void camerad_thread() {
-  LOG("-- v1 camerad starting (VFE PIX DMABUF required; no runtime RDI/MMAP CPU fallback)");
+  LOG("-- v0 camerad starting (VFE PIX DMABUF required; no runtime RDI/MMAP CPU fallback)");
 
   VisionIpcServer v("camerad");
 
@@ -1349,10 +1349,10 @@ void camerad_thread() {
     if (!config.enabled) continue;
 
     const int i = config.camera_num;
-    v1_cams[i] = resolve_cam_config(media_fd, i);
+    v0_cams[i] = resolve_cam_config(media_fd, i);
     LOG("cam %d: csiphy=%u csid=%u vfe_pix=%u pix_dev=%d pix_subdev=%d",
-        i, v1_cams[i].csiphy_entity, v1_cams[i].csid_entity,
-        v1_cams[i].vfe_pix_entity, v1_cams[i].pix_video_dev, v1_cams[i].vfe_pix_subdev);
+        i, v0_cams[i].csiphy_entity, v0_cams[i].csid_entity,
+        v0_cams[i].vfe_pix_entity, v0_cams[i].pix_video_dev, v0_cams[i].vfe_pix_subdev);
   }
   close(media_fd);
 
@@ -1379,7 +1379,7 @@ void camerad_thread() {
   };
   for (auto it = cams.rbegin(); it != cams.rend(); ++it) stream_one(*it);
 
-  LOG("-- v1 camerad streaming");
+  LOG("-- v0 camerad streaming");
 
   // Rebuild the complete media and VisionIPC graph when an expected camera
   // stops producing frames. VisionIPC streams cannot be recreated safely in
@@ -1415,7 +1415,7 @@ void camerad_thread() {
     }
   }
 
-  LOG("-- v1 camerad stopping");
+  LOG("-- v0 camerad stopping");
   for (auto &cam : cams) {
     cam->camera.stop_streaming();
   }
