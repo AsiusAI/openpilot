@@ -23,7 +23,7 @@ public:
     static const std::map<std::string, cereal::InitData::DeviceType> device_map = {
       {"tizi", cereal::InitData::DeviceType::TIZI},
       {"mici", cereal::InitData::DeviceType::MICI},
-      {"v1", cereal::InitData::DeviceType::V1},
+      {"v0", cereal::InitData::DeviceType::V0},
     };
     static const auto it = device_map.find(get_name());
     assert(it != device_map.end());

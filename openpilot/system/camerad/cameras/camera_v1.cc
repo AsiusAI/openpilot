@@ -37,11 +37,11 @@ struct OneCamRoute {
   const char *sensor;
 };
 
-// Asius v1 camera routing:
+// Asius v0 camera routing:
 //   Runtime camerad path: CSIPHY -> CSID PIX pad -> VFE PIX -> NV12 DMABUF.
 //   Raw RDI probing lives in standalone bring-up tools, not in this runtime path.
 // openpilot camera_num 0 is wide road, camera_num 1 is road,
-// camera_num 2 is driver. For Asius v1:
+// camera_num 2 is driver. For Asius v0:
 //   CAM1 -> driver, CAM2 -> road, CAM3 -> wide road.
 struct V1CamConfig {
   uint32_t csiphy_entity;

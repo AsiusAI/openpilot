@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-DEFAULT_DEVICE_NAME = "Asius v1"
+DEFAULT_DEVICE_NAME = "Asius v0"
 DEVICE_NAME_PATH = Path("/data/asius/device-name")
 MAX_DEVICE_NAME_LENGTH = 40
 

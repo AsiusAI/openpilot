@@ -38,14 +38,18 @@ RPY_INIT = np.array([0.0,0.0,0.0])
 WIDE_FROM_DEVICE_EULER_INIT = np.array([0.0, 0.0, 0.0])
 HEIGHT_INIT = np.array([1.22])
 
-# These values are needed to accommodate the model frame in the narrow cam
-if HARDWARE.get_device_type() in ('mici', 'v1'):
+# These values are needed to accommodate the model frame in the narrow cam.
+# The screenless v0 enclosure can be mounted at a wider range of angles, and
+# calibration should compensate for that rather than blocking engagement.
+if HARDWARE.get_device_type() == 'v0':
+  PITCH_LIMITS = np.radians([-20.0, 20.0])
+  YAW_LIMITS = np.radians([-20.0, 20.0])
+elif HARDWARE.get_device_type() == 'mici':
   PITCH_LIMITS = np.array([-0.143101, 0.22235988])
+  YAW_LIMITS = np.array([-0.06912048084718224, 0.06912048084718235])
 else:
   PITCH_LIMITS = np.array([-0.09074112085129739, 0.17])
-YAW_LIMITS = np.array([-0.06912048084718224, 0.06912048084718235])
-if HARDWARE.get_device_type() == 'v1':
-  YAW_LIMITS += np.radians([-2.0, 2.0])
+  YAW_LIMITS = np.array([-0.06912048084718224, 0.06912048084718235])
 DEBUG = os.getenv("DEBUG") is not None
 
 

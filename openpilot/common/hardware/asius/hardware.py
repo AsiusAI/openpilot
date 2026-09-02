@@ -70,7 +70,7 @@ class HardwareAsius(HardwareComma):
     return None
 
   def get_device_type(self):
-    return "v1"
+    return "v0"
 
   def get_serial(self):
     with open("/sys/devices/soc0/serial_number") as serial_file:

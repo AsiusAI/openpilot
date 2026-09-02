@@ -28,8 +28,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Asius v1
-            device: asius-v1
+          - name: Asius v0
+            device: asius-v0
             runner: asius-dragon-v1
           - name: comma 3X
             device: comma-3x
@@ -96,7 +96,7 @@ jobs:
           python -u openpilot/selfdrive/test/process_replay/model_replay.py --timing-only
 
       - name: Bluetooth health
-        if: matrix.device == 'asius-v1'
+        if: matrix.device == 'asius-v0'
         run: |
           bluetoothctl show | grep -q "Powered: yes"
           python -m unittest openpilot.system.athena.tests.test_ble_protocol openpilot.system.athena.tests.test_ble_pairing openpilot.system.athena.tests.test_bled
