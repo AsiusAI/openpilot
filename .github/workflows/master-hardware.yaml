@@ -30,7 +30,7 @@ jobs:
         include:
           - name: Asius v0
             device: asius-v0
-            runner: asius-dragon-v0
+            runner: asius-v0
           - name: comma 3X
             device: comma-3x
             runner: asius-comma-3x
