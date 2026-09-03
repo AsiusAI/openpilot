@@ -18,7 +18,7 @@ from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
 from openpilot.common.timeout import Timeout
 from openpilot.common.hardware.hw import Paths
-from openpilot.common.hardware import COMMA_HARDWARE
+from openpilot.common.hardware import ASIUS_HARDWARE, COMMA_HARDWARE
 from openpilot.system.loggerd.xattr_cache import getxattr
 from openpilot.system.loggerd.deleter import PRESERVE_ATTR_NAME, PRESERVE_ATTR_VALUE
 from openpilot.system.manager.process_config import managed_processes
@@ -198,8 +198,9 @@ class TestLoggerd(OpenpilotTestCase):
   def test_rotation(self):
     Params().put("RecordFront", True, block=True)
 
-    full_camera_extension = "mp4" if COMMA_HARDWARE else "mkv"
-    expected_files = {"rlog.zst", "qlog.zst", "qcamera.mp4", *(f"{camera}.{full_camera_extension}" for camera in ("fcamera", "dcamera", "ecamera"))}
+    camera_extension = "mp4" if ASIUS_HARDWARE else "hevc"
+    qcamera_filename = "qcamera.mp4" if ASIUS_HARDWARE else "qcamera.ts"
+    expected_files = {"rlog.zst", "qlog.zst", qcamera_filename, *(f"{camera}.{camera_extension}" for camera in ("fcamera", "dcamera", "ecamera"))}
 
     num_segs = random.randint(2, 3)
     length = random.randint(4, 5) # H264 encoder uses 40 lookahead frames and does B-frame reordering, so minimum 3 seconds before qcam output
@@ -323,7 +324,7 @@ class TestLoggerd(OpenpilotTestCase):
 
     self._publish_camera_and_audio_messages()
 
-    dcamera_file = 'dcamera.mp4' if COMMA_HARDWARE else 'dcamera.mkv'
+    dcamera_file = 'dcamera.mp4' if ASIUS_HARDWARE else 'dcamera.hevc'
     dcamera_exists = os.path.exists(os.path.join(self._get_latest_log_dir(), dcamera_file))
     assert dcamera_exists == record_front
 
@@ -334,8 +335,8 @@ class TestLoggerd(OpenpilotTestCase):
 
     self._publish_camera_and_audio_messages()
 
-    qcamera_mp4_path = os.path.join(self._get_latest_log_dir(), 'qcamera.mp4')
-    ffprobe_cmd = f"ffprobe -i {qcamera_mp4_path} -show_streams -select_streams a -loglevel error"
+    qcamera_file = 'qcamera.mp4' if ASIUS_HARDWARE else 'qcamera.ts'
+    ffprobe_cmd = f"ffprobe -i {os.path.join(self._get_latest_log_dir(), qcamera_file)} -show_streams -select_streams a -loglevel error"
     has_audio_stream = subprocess.run(ffprobe_cmd, shell=True, capture_output=True).stdout.strip() != b''
     assert has_audio_stream == record_audio
 

@@ -95,24 +95,36 @@ public:
   std::vector<EncoderInfo> encoder_infos;
 };
 
+#ifdef __ASIUS_HARDWARE__
+constexpr char MAIN_ROAD_FILENAME[] = "fcamera.mp4";
+constexpr char MAIN_WIDE_ROAD_FILENAME[] = "ecamera.mp4";
+constexpr char MAIN_CABIN_FILENAME[] = "dcamera.mp4";
+constexpr char QCAM_FILENAME[] = "qcamera.mp4";
+#else
+constexpr char MAIN_ROAD_FILENAME[] = "fcamera.hevc";
+constexpr char MAIN_WIDE_ROAD_FILENAME[] = "ecamera.hevc";
+constexpr char MAIN_CABIN_FILENAME[] = "dcamera.hevc";
+constexpr char QCAM_FILENAME[] = "qcamera.ts";
+#endif
+
 const EncoderInfo main_road_encoder_info = {
   .publish_name = "narrowRoadEncodeData",
   .thumbnail_name = "thumbnail",
-  .filename = Hardware::PC() ? "fcamera.mkv" : "fcamera.mp4",
+  .filename = MAIN_ROAD_FILENAME,
   .get_settings = [](int in_width){return EncoderSettings::MainEncoderSettings(in_width);},
   INIT_ENCODE_FUNCTIONS(NarrowRoadEncode),
 };
 
 const EncoderInfo main_wide_road_encoder_info = {
   .publish_name = "wideRoadEncodeData",
-  .filename = Hardware::PC() ? "ecamera.mkv" : "ecamera.mp4",
+  .filename = MAIN_WIDE_ROAD_FILENAME,
   .get_settings = [](int in_width){return EncoderSettings::MainEncoderSettings(in_width);},
   INIT_ENCODE_FUNCTIONS(WideRoadEncode),
 };
 
-const EncoderInfo main_driver_encoder_info = {
-  .publish_name = "driverEncodeData",
-  .filename = Hardware::PC() ? "dcamera.mkv" : "dcamera.mp4",
+const EncoderInfo main_cabin_encoder_info = {
+  .publish_name = "cabinEncodeData",
+  .filename = MAIN_CABIN_FILENAME,
   .record = Params().getBool("RecordFront"),
   .get_settings = [](int in_width){return EncoderSettings::MainEncoderSettings(in_width);},
   INIT_ENCODE_FUNCTIONS(CabinEncode),
@@ -150,8 +162,8 @@ const EncoderInfo stream_cabin_encoder_info = {
 };
 
 const EncoderInfo qcam_encoder_info = {
-  .publish_name = "qRoadEncodeData",
-  .filename = "qcamera.mp4",
+  .publish_name = "qNarrowRoadEncodeData",
+  .filename = QCAM_FILENAME,
   .include_audio = Params().getBool("RecordAudio"),
 #ifdef __ASIUS_HARDWARE__
   .frame_width = 672,
@@ -164,9 +176,9 @@ const EncoderInfo qcam_encoder_info = {
   INIT_ENCODE_FUNCTIONS(QNarrowRoadEncode),
 };
 
-const LogCameraInfo road_camera_info{
-  .thread_name = "road_cam_encoder",
-  .stream_type = VISION_STREAM_ROAD,
+const LogCameraInfo narrow_road_camera_info{
+  .thread_name = "narrow_road_cam_encoder",
+  .stream_type = VISION_STREAM_NARROW_ROAD,
   .encoder_infos = {main_road_encoder_info, qcam_encoder_info}
 };
 
@@ -183,8 +195,8 @@ const LogCameraInfo cabin_camera_info{
 };
 
 const LogCameraInfo stream_road_camera_info{
-  .thread_name = "road_cam_encoder",
-  .stream_type = VISION_STREAM_ROAD,
+  .thread_name = "narrow_road_cam_encoder",
+  .stream_type = VISION_STREAM_NARROW_ROAD,
   .encoder_infos = {stream_road_encoder_info},
 };
 
@@ -194,10 +206,10 @@ const LogCameraInfo stream_wide_road_camera_info{
   .encoder_infos = {stream_wide_road_encoder_info},
 };
 
-const LogCameraInfo stream_driver_camera_info{
-  .thread_name = "driver_cam_encoder",
-  .stream_type = VISION_STREAM_DRIVER,
-  .encoder_infos = {stream_driver_encoder_info},
+const LogCameraInfo stream_cabin_camera_info{
+  .thread_name = "cabin_cam_encoder",
+  .stream_type = VISION_STREAM_CABIN,
+  .encoder_infos = {stream_cabin_encoder_info},
 };
 
 const LogCameraInfo cameras_logged[] = {narrow_road_camera_info, wide_road_camera_info, cabin_camera_info};

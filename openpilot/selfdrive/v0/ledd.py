@@ -425,7 +425,7 @@ def engaged_state(sm) -> LedState:
 
 
 def camera_led_brightness(sm) -> int:
-  for service in ("wideRoadCameraState", "roadCameraState"):
+  for service in ("wideRoadCameraState", "narrowRoadCameraState"):
     if not sm.seen[service] or not sm.alive[service] or not sm.valid[service]:
       continue
 
@@ -540,7 +540,7 @@ def main() -> None:
     'extrinsicsCalibration',
     'managerState',
     'pandaStates',
-    'roadCameraState',
+    'narrowRoadCameraState',
     'selfdriveState',
     'vehicleParameters',
     'wideRoadCameraState',

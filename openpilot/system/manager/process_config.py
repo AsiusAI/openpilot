@@ -71,9 +71,6 @@ def or_(*fns):
 def and_(*fns):
   return lambda *args: operator.and_(*(fn(*args) for fn in fns))
 
-def not_(*fns):
-  return lambda *args: operator.not_(*(fn(*args) for fn in fns))
-
 procs = [
   DaemonProcess("manage_athenad", "openpilot.system.athena.manage_athenad", "AthenadPid", enabled=False),
   DaemonProcess("manage_websocketd", "openpilot.system.app.manage_websocketd", "WebsocketdPid"),

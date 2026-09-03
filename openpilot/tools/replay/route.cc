@@ -180,9 +180,9 @@ void Route::addFileToSegment(int n, const std::string &file) {
   } else if (name == "qlog.bz2" || name == "qlog.zst" || name == "qlog") {
     segments_[n].qlog = file;
   } else if (name == "fcamera.mp4" || name == "fcamera.hevc") {
-    segments_[n].road_cam = file;
+    segments_[n].narrow_road_cam = file;
   } else if (name == "dcamera.mp4" || name == "dcamera.hevc") {
-    segments_[n].driver_cam = file;
+    segments_[n].cabin_cam = file;
   } else if (name == "ecamera.mp4" || name == "ecamera.hevc") {
     segments_[n].wide_road_cam = file;
   } else if (name == "qcamera.mp4" || name == "qcamera.ts") {

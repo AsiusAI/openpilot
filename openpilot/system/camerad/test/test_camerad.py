@@ -5,6 +5,7 @@ import unittest
 import numpy as np
 
 from openpilot.common.parameterized import parameterized
+from openpilot.common.hardware import ASIUS_HARDWARE
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.cereal.services import SERVICE_LIST
 from openpilot.tools.lib.log_time_series import msgs_to_time_series
@@ -49,10 +50,9 @@ def _camera_session():
     exposure = {cam: [] for cam in CAMERAS}
     start = time.monotonic()
     while time.monotonic() - start < MAX_TEST_TIME:
-      rpic, dpic = get_snapshots(frame="roadCameraState", front_frame="driverCameraState")
-      wpic, _ = get_snapshots(frame="wideRoadCameraState", front_frame=None)
-      images = [rpic, dpic, wpic]
-      for cam, img in zip(CAMERAS, images, strict=True):
+      rpic, dpic = get_snapshots(frame="narrowRoadCameraState", front_frame="cabinCameraState")
+      wpic, _ = get_snapshots(frame="wideRoadCameraState")
+      for cam, img in zip(CAMERAS, [rpic, dpic, wpic], strict=True):
         exposure[cam].append(_exposure_stats(img))
 
       if time.monotonic() - start >= TEST_TIMESPAN and _exposure_stable(exposure):
@@ -109,12 +109,35 @@ class TestCamerad(OpenpilotTestCase):
 
   def test_frame_skips(self):
     for c in CAMERAS:
-      frame_ids = self.logs[c]['frameId'][STARTUP_FRAME_IGNORE:]
-      frame_diffs = np.diff(frame_ids)
-      assert frame_diffs.min() == 1, f"{c} has duplicate or decreasing frame IDs"
-      assert frame_diffs.max() <= 2, f"{c} dropped consecutive frames"
-      dropped_frames = np.count_nonzero(frame_diffs != 1)
-      assert dropped_frames <= MAX_ISOLATED_FRAME_DROPS, f"{c} dropped too many frames: {dropped_frames}"
+      frame_diffs = np.diff(self.logs[c]['frameId'][STARTUP_FRAME_IGNORE:] if ASIUS_HARDWARE else self.logs[c]['frameId'])
+      if ASIUS_HARDWARE:
+        assert frame_diffs.min() == 1, f"{c} has duplicate or decreasing frame IDs"
+        assert frame_diffs.max() <= 2, f"{c} dropped consecutive frames"
+        dropped_frames = np.count_nonzero(frame_diffs != 1)
+        assert dropped_frames <= MAX_ISOLATED_FRAME_DROPS, f"{c} dropped too many frames: {dropped_frames}"
+      else:
+        assert set(frame_diffs) == {1, }, f"{c} has frame skips"
+
+  def test_frame_sync(self):
+    if ASIUS_HARDWARE:
+      self.skipTest("Asius cameras are not hardware-synchronized")
+
+    SYNCED_CAMS = ('narrowRoadCameraState', 'wideRoadCameraState')
+    n = range(len(self.logs['narrowRoadCameraState']['t'][:-10]))
+
+    frame_ids = {i: [self.logs[cam]['frameId'][i] for cam in CAMERAS] for i in n}
+    assert all(len(set(v)) == 1 for v in frame_ids.values()), "frame IDs not aligned"
+
+    # road and wide cameras should be synced within 1.1ms
+    synced_times = {i: [self.logs[cam]['timestampSof'][i] for cam in SYNCED_CAMS] for i in n}
+    diffs = {i: (max(ts) - min(ts))/1e6 for i, ts in synced_times.items()}
+    laggy_frames = {k: v for k, v in diffs.items() if v > 1.1}
+    assert len(laggy_frames) == 0, f"Frames not synced properly: {laggy_frames=}"
+
+    # cabin camera should be staggered ~25ms from road camera
+    for i in n:
+      offset_ms = abs(self.logs['cabinCameraState']['timestampSof'][i] - self.logs['narrowRoadCameraState']['timestampSof'][i]) / 1e6
+      assert 20 < offset_ms < 30, f"cabin camera stagger out of range at frame {i}: {offset_ms:.1f}ms (expected ~25ms)"
 
   def test_sanity_checks(self):
     self._sanity_checks(self.logs)

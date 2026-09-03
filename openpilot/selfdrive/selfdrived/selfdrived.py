@@ -48,9 +48,9 @@ IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 
 
 def get_camera_packets(no_dcam: bool) -> list[str]:
-  packets = ["roadCameraState", "wideRoadCameraState"]
+  packets = ["narrowRoadCameraState", "wideRoadCameraState"]
   if not no_dcam:
-    packets.insert(1, "driverCameraState")
+    packets.insert(1, "cabinCameraState")
   return packets
 
 

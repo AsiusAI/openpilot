@@ -148,7 +148,7 @@ class LocationEstimator:
     elif which == "carState":
       self.car_speed = abs(msg.vEgo)
 
-    elif which == "liveCalibration":
+    elif which == "extrinsicsCalibration":
       # Note that we use this message during calibration
       if len(msg.rpyCalib) > 0:
         calib = np.array(msg.rpyCalib)

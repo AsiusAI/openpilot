@@ -14,6 +14,7 @@ from tqdm import trange
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.common.params import Params
 from openpilot.common.timeout import Timeout
+from openpilot.common.hardware import ASIUS_HARDWARE
 from openpilot.system.manager.process_config import managed_processes
 from openpilot.tools.lib.logreader import LogReader
 from openpilot.common.hardware.hw import Paths
@@ -22,10 +23,10 @@ SEGMENT_LENGTH = 2
 FULL_SIZE = 2507572
 def hevc_size(w): return FULL_SIZE // 2 if w <= 1344 else FULL_SIZE
 CAMERAS = [
-  ("fcamera.mp4", 20, hevc_size, "roadEncodeIdx"),
-  ("dcamera.mp4", 20, hevc_size, "driverEncodeIdx"),
-  ("ecamera.mp4", 20, hevc_size, "wideRoadEncodeIdx"),
-  ("qcamera.mp4", 20, lambda x: 130000, None),
+  (f"fcamera.{('mp4' if ASIUS_HARDWARE else 'hevc')}", 20, hevc_size, "narrowRoadEncodeIdx"),
+  (f"dcamera.{('mp4' if ASIUS_HARDWARE else 'hevc')}", 20, hevc_size, "cabinEncodeIdx"),
+  (f"ecamera.{('mp4' if ASIUS_HARDWARE else 'hevc')}", 20, hevc_size, "wideRoadEncodeIdx"),
+  (f"qcamera.{('mp4' if ASIUS_HARDWARE else 'ts')}", 20, lambda x: 130000, None),
 ]
 CAMERAD_PROCESS = "camerad"
 ENCODERD_PROCESS = "encoderd"

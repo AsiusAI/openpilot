@@ -25,7 +25,7 @@ def tensor_from_dma_buf(ptr: int, fd: int | None, size: int, device: str) -> Ten
   return tensor
 
 
-def get_tg_input_devices(process_name: str, usbgpu: bool):
+def get_tg_input_devices(process_name: str, chestnut: bool):
   with open(TG_INPUT_DEVICES_PATH) as f:
     return json.load(f)[process_name]['default' if not chestnut else 'chestnut']
 

@@ -28,7 +28,7 @@ DESCRIPTIONS = {
     "without a turn signal activated while driving over 31 mph (50 km/h)."
   ),
   "AlwaysOnDM": tr_noop("Enable driver monitoring even when openpilot is not engaged."),
-  'RecordFront': tr_noop("Upload data from the driver facing camera and help improve the driver monitoring algorithm."),
+  'RecordFront': tr_noop("Upload data from the cabin camera and help improve the driver monitoring algorithm."),
   "ShareDrivingData": tr_noop(
     "Allow Asius to decrypt uploaded routes for product improvement and future model training. " +
     "When disabled, Asius cannot decrypt your data and unpreserved routes are deleted after 30 days."

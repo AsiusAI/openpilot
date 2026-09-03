@@ -33,9 +33,8 @@ from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_drivi
 from openpilot.common.file_chunker import open_file_chunked
 from openpilot.common.hardware.usb import CHESTNUT_USB_IDS
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
-from openpilot.selfdrive.modeld.helpers import chestnut_present, chestnut_compiled, modeld_pkl_path, get_tg_input_devices, load_oob, tensor_from_dma_buf
+from openpilot.selfdrive.modeld.helpers import chestnut_present, chestnut_compiled, modeld_pkl_path, load_oob
 
-PROCESS_NAME = "openpilot.selfdrive.modeld.modeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 
 LAT_SMOOTH_SECONDS = 0.0
@@ -175,10 +174,10 @@ class FrameMeta:
 class ModelState:
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
-  def __init__(self, cam_w: int, cam_h: int, usbgpu: bool):
-    input_devices = get_tg_input_devices(PROCESS_NAME, usbgpu)
-    self.WARP_DEV, self.QUEUE_DEV = input_devices['WARP_DEV'], input_devices['QUEUE_DEV']
-    jits = load_oob(open_file_chunked(modeld_pkl_path(usbgpu)))
+  def __init__(self, cam_w: int, cam_h: int, chestnut: bool):
+    jits = load_oob(open_file_chunked(modeld_pkl_path(chestnut)))
+    input_devices = jits['input_devices']
+    self.model_device = input_devices['model']
     metadata = jits['metadata']
     self.input_shapes = metadata['input_shapes']
     self.vision_input_names = [k for k in self.input_shapes if 'img' in k]
@@ -188,29 +187,20 @@ class ModelState:
     self.chestnut = chestnut
 
     self.frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
-    self.input_queues, self.npy = make_input_queues(self.input_shapes, self.frame_skip, device=self.QUEUE_DEV)
-    self.full_frames: dict[str, Tensor] = {}
-    self._blob_cache: dict[tuple[str, int, int | None], Tensor] = {}
+    self.frame_copy_size = nv12_copy_size(*get_nv12_info(cam_w, cam_h)[:3])
+    self.input_queues, self.npy, self.frame_views = make_input_queues(
+      self.input_shapes, self.frame_skip, device=self.model_device, frame_copy_size=self.frame_copy_size)
     self.parser = Parser()
-    self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in ('img', 'big_img')}
-    self.run_policy = jits['run_policy']
-    self.warp = jits[(cam_w,cam_h)]
+    self.run_model = jits['run_model'][(cam_w,cam_h)]
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
     return parsed_model_outputs
 
   def run(self, bufs: dict[str, VisionBuf], transforms: dict[str, np.ndarray],
-          inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray] | None:
-    for key in bufs.keys():
-      ptr = np.frombuffer(bufs[key].data, dtype=np.uint8).ctypes.data
-      fd = getattr(bufs[key], 'fd', None)
-      yuv_size = self.frame_buf_params[key][3]
-      # There is a ringbuffer of imgs, just cache tensors pointing to all of them
-      cache_key = (key, ptr, fd)
-      if cache_key not in self._blob_cache:
-        self._blob_cache[cache_key] = tensor_from_dma_buf(ptr, fd, yuv_size, self.WARP_DEV)
-      self.full_frames[key] = self._blob_cache[cache_key]
+          inputs: dict[str, np.ndarray], after_enqueue: Callable[[], None] | None = None) -> dict[str, np.ndarray]:
+    for key, buf in bufs.items():
+      np.copyto(self.frame_views[key], np.frombuffer(buf.data, dtype=np.uint8, count=self.frame_copy_size))
 
     # Model decides when action is completed, so desire input is just a pulse triggered on rising edge
     inputs['desire_pulse'][0] = 0
@@ -221,16 +211,12 @@ class ModelState:
     self.npy['tfm'][:,:] = transforms['img'][:,:]
     self.npy['big_tfm'][:,:] = transforms['big_img'][:,:]
 
-    warped = self.warp(**{k: self.input_queues[k] for k in WARP_INPUTS}, frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
-
-    outs, = self.run_policy(
-      **{k: self.input_queues[k] for k in POLICY_INPUTS if k in self.input_queues}, warped=warped
-    )
+    outs, = self.run_model(**{k: self.input_queues[k] for k in MODELD_INPUTS})
+    if after_enqueue is not None:
+      after_enqueue()
     model_output = outs.numpy()[0]
-    if self.usbgpu and not np.all(np.isfinite(model_output)):
-      # TODO remove with prev_feat
-      cloudlog.error("model output not finite, dropping frame")
-      return None
+    if self.chestnut and not np.all(np.isfinite(model_output)):
+      raise RuntimeError("model output not finite")
     outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
     self.npy['prev_feat'][:] = model_output[self.output_slices['hidden_state']]
 
@@ -239,14 +225,12 @@ class ModelState:
     return outputs_dict
 
   def warmup(self) -> None:
-    dummy_frames = {k: np.zeros(self.frame_buf_params[k][3], dtype=np.uint8) for k in self.vision_input_names}
-    # MSM DRM cannot import raw pointers, so stage warmup frames in regular device buffers.
-    for key, frame in dummy_frames.items():
-      self._blob_cache[(key, frame.ctypes.data, None)] = Tensor(frame, device=self.WARP_DEV).contiguous().realize()
+    dummy_frames = {k: np.zeros(self.frame_copy_size, dtype=np.uint8) for k in self.vision_input_names}
     eye = np.eye(3, dtype=np.float32)
     dims = {'desire_pulse': ModelConstants.DESIRE_LEN, 'traffic_convention': 2, 'action_t': 2}
     self.run(dummy_frames, dict.fromkeys(self.vision_input_names, eye), {k: np.zeros(v, dtype=np.float32) for k, v in dims.items()})
-    self.input_queues, self.npy = make_input_queues(self.input_shapes, self.frame_skip, device=self.QUEUE_DEV)
+    self.input_queues, self.npy, self.frame_views = make_input_queues(
+      self.input_shapes, self.frame_skip, device=self.model_device, frame_copy_size=self.frame_copy_size)
     self.prev_desire[:] = 0
 
 
