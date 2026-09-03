@@ -153,16 +153,19 @@ component: MED17.5.5 G (CAXA 1.4 TSI)
 coding:    00004D (short coding)
 ```
 
-Factory retrofit procedures
-change the engine ECU from conventional cruise (GRA) to ACC as well as changing
-the ABS bit; the byte layout is firmware-specific. A Golf VI retrofit report
-for this exact `03C906016AJ` MED17.5.5 family says the ECU raises a powertrain
-variant error when ACC traffic is introduced unless a tuner enables ACC message
-reception in the engine firmware. Community reverse engineering likewise says
-MED17.5.5 can be patched for ACC. This points to a firmware feature patch rather
-than a safe short-coding-only change. Obtain or derive and verify a patch for
-software `9458`; do not flash another MED17.5.5 version or apply the example
-engine Byte 5 change from a different part number.
+Factory retrofit procedures change the engine ECU from conventional cruise
+(GRA) to ACC as well as changing the ABS bit. A successful test on the same
+`03C906016AJ` ECU family established that this is a KWP2000 Access Authorization
+Code 2 (VCDS Coding II/Login 2) configuration, not an engine firmware patch.
+The reversible radarless test sequence is `16167` (disable cruise/ACC), followed
+by `13377` (enable ACC without Follow-to-Stop). The stock rollback is `16167`,
+then `11463` (enable conventional cruise), followed by an ignition cycle.
+
+Community references also list `30903` for automatic transmissions with
+Follow-to-Stop and Front Assist, but that mode is deliberately excluded here:
+this car has no radar/Front Assist and its H31 ABS cannot safely hold brake
+pressure at a stop. Automatic transmission alone is not a reason to select the
+Follow-to-Stop configuration for this experiment.
 
 ```bash
 python tools/scripts/car/vw_pq_config.py engine-info
@@ -171,14 +174,39 @@ python tools/scripts/car/vw_pq_config.py engine-info
 `engine-info`, like `abs-info`, is read-only and prints identity plus the
 controller's current short or long coding when available.
 
+The guarded longitudinal configuration actions are:
+
+```bash
+# These are previews unless --experimental-long-write is also supplied.
+python tools/scripts/car/vw_pq_config.py engine-acc-enable
+python tools/scripts/car/vw_pq_config.py engine-stock-restore
+python tools/scripts/car/vw_pq_config.py abs-acc-enable
+python tools/scripts/car/vw_pq_config.py abs-stock-restore
+```
+
+They are hard-locked to the exact live engine and ABS identities above. The ABS
+action accepts only the saved 19-byte pair and verifies that Byte 16 Bit 5 is
+the sole delta (`0x35` to `0x15`, or the reverse). The engine action always
+disables the existing mode before selecting ACC or stock cruise, and attempts
+the stock-cruise activation immediately if ACC activation is rejected.
+
+Even with the explicit write flag, each action prints every application-layer
+request and requires a target-specific typed confirmation. The Code 2 request
+uses KWP2000 service `27 02` plus the 16-bit code; ABS coding uses the VW
+workshop fingerprint DID `F198` followed by coding DID `0600`. These wire
+formats have unit coverage and public protocol support, but have not yet been
+captured from ODIS on this exact ECU/ABS pair. Compare them against an ODIS or
+VCDS trace before the first live longitudinal configuration write.
+
 ### Required validation order
 
 1. With experimental longitudinal disabled, run `abs-info` and `engine-info`.
    Save the complete output and independently decode the original values.
-2. Do not write until the ABS Byte 16 delta, exact engine-firmware delta,
-   rollback requests, battery conditions, and diagnostic sessions are all
-   known. A gateway installation-list change is not justified for radarless
-   operation unless logs prove a controller explicitly requires Address 13.
+2. Do not write until the ABS Byte 16 delta, engine Code 2 requests, rollback
+   requests, battery conditions, diagnostic sessions, and raw ODIS/VCDS request
+   framing are all confirmed. A gateway installation-list change is not
+   justified for radarless operation unless logs prove a controller explicitly
+   requires Address 13.
 3. If a coding write is later approved, perform one controller at a time with
    engine off and ignition on, then power-cycle and read back before proceeding.
    Clear no DTCs until they have been recorded and understood.

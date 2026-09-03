@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 
-"""Read VW PQ ABS identity/coding or change HCA adaptation channel 6.
+"""Read/configure the verified VW PQ Golf EPS, ABS, and engine.
 
 This implements the vendor-specific KWP2000-over-TP2.0 sequence used by the
-verified 1K0909144M SW 3201 rack and 1K0907379BJ SW 0121 ABS.
+verified 1K0909144M SW 3201 rack, 1K0907379BJ SW 0121 ABS, and
+03C906016AJ SW 9458 engine ECU.
 """
 
 import argparse
@@ -24,6 +25,13 @@ SUPPORTED_PART_NUMBER = "1K0909144M"
 SUPPORTED_SOFTWARE = "3201"
 SUPPORTED_ABS_PART_NUMBER = "1K0907379BJ"
 SUPPORTED_ABS_SOFTWARE = "0121"
+SUPPORTED_ENGINE_PART_NUMBER = "03C906016AJ"
+SUPPORTED_ENGINE_SOFTWARE = "9458"
+ABS_STOCK_CODING = bytes.fromhex("143B400D112800FB281402E7881F0040350000")
+ABS_ACC_CODING = bytes.fromhex("143B400D112800FB281402E7881F0040150000")
+ENGINE_DISABLE_CRUISE_CODE = 16167
+ENGINE_STOCK_CRUISE_CODE = 11463
+ENGINE_ACC_CODE = 13377
 MIN_WRITE_VOLTAGE_MV = 12000
 MAX_WRITE_VOLTAGE_MV = 13000
 WRITE_CONFIRMATION = "ENGINE OFF, IGNITION ON"
@@ -265,6 +273,13 @@ def validate_abs_identity(identity: EpsIdentity) -> None:
     )
 
 
+def validate_engine_identity(identity: EpsIdentity) -> None:
+  if identity.part_number != SUPPORTED_ENGINE_PART_NUMBER or identity.software != SUPPORTED_ENGINE_SOFTWARE:
+    raise DiagnosticError(
+      f"refusing unsupported engine {identity.part_number!r} SW {identity.software!r}; expected {SUPPORTED_ENGINE_PART_NUMBER} SW {SUPPORTED_ENGINE_SOFTWARE}"
+    )
+
+
 def parse_long_coding(response: bytes) -> LongCoding:
   """Parse the VW KWP ReadECUIdentification(0x9A) long-coding record."""
   if not response.startswith(b"\x5a\x9a"):
@@ -287,6 +302,46 @@ def read_did(kwp: KwpClient, identifier: int) -> bytes:
   response = kwp.request(b"\x22" + did)
   expect_prefix(response, b"\x62" + did, f"DID 0x{identifier:04X}")
   return response[3:]
+
+
+def write_did(kwp: KwpClient, identifier: int, value: bytes) -> bytes:
+  """Write one KWP2000 common identifier and require its echoed identifier."""
+  did = identifier.to_bytes(2, "big")
+  request = b"\x2e" + did + value
+  response = kwp.request(request, pending_timeout=20.0)
+  expect_prefix(response, b"\x6e" + did, f"DID 0x{identifier:04X} write")
+  return request
+
+
+def code2_request(code: int) -> bytes:
+  """Build VW KWP2000 Access Authorization Code 2 (Coding II)."""
+  if not 0 <= code <= 0xFFFF:
+    raise ValueError("Code 2 must fit in 16 bits")
+  return b"\x27\x02" + code.to_bytes(2, "big")
+
+
+def apply_code2(kwp: KwpClient, code: int) -> bytes:
+  request = code2_request(code)
+  response = kwp.request(request, pending_timeout=20.0)
+  expect_prefix(response, b"\x67\x02", f"Code 2 {code}")
+  return request
+
+
+def validate_abs_coding_transition(current: bytes, target: bytes) -> None:
+  if {current, target} != {ABS_STOCK_CODING, ABS_ACC_CODING}:
+    raise DiagnosticError("refusing ABS coding outside the exact saved stock/ACC pair")
+  differences = [(index, old, new) for index, (old, new) in enumerate(zip(current, target, strict=True)) if old != new]
+  if differences != [(16, 0x35 if current == ABS_STOCK_CODING else 0x15, 0x15 if target == ABS_ACC_CODING else 0x35)]:
+    raise DiagnosticError(f"refusing unexpected ABS coding delta: {differences}")
+
+
+def confirm_persistent_write(action: str) -> None:
+  confirmation = f"{WRITE_CONFIRMATION}: {action}"
+  print("\nNo write has been sent yet.")
+  print("Before continuing: engine OFF, ignition ON, transmission in Park, controls untouched.")
+  entered = input(f"Type exactly {confirmation!r} to continue: ")
+  if entered != confirmation:
+    raise DiagnosticError("confirmation did not match; no write sent")
 
 
 def workshop_code_for_writing(current: bytes) -> bytes:
@@ -367,11 +422,29 @@ class ShortAdaptation:
 
 
 def main() -> None:
-  description = "Read the verified Golf MK60EC1 ABS identity/coding, or show/change HCA adaptation Channel 6 on its 1K0909144M SW 3201 steering rack."
+  description = "Read/configure the verified Golf EPS, MK60EC1 ABS, and MED17.5.5 engine."
   parser = argparse.ArgumentParser(description=description)
-  parser.add_argument("action", choices=("show", "enable", "disable", "abs-info", "engine-info"))
+  parser.add_argument(
+    "action",
+    choices=(
+      "show",
+      "enable",
+      "disable",
+      "abs-info",
+      "engine-info",
+      "abs-acc-enable",
+      "abs-stock-restore",
+      "engine-acc-enable",
+      "engine-stock-restore",
+    ),
+  )
   parser.add_argument("--bus", type=int, default=1, help="panda CAN bus (default: 1)")
   parser.add_argument("--debug", action="store_true", help="print raw CAN and KWP traffic")
+  parser.add_argument(
+    "--experimental-long-write",
+    action="store_true",
+    help="allow a guarded engine/ABS longitudinal configuration write after showing the complete request",
+  )
   args = parser.parse_args()
 
   panda = Panda()
@@ -384,7 +457,11 @@ def main() -> None:
 
   module = {
     "abs-info": ABS_LOGICAL_ADDRESS,
+    "abs-acc-enable": ABS_LOGICAL_ADDRESS,
+    "abs-stock-restore": ABS_LOGICAL_ADDRESS,
     "engine-info": ENGINE_LOGICAL_ADDRESS,
+    "engine-acc-enable": ENGINE_LOGICAL_ADDRESS,
+    "engine-stock-restore": ENGINE_LOGICAL_ADDRESS,
   }.get(args.action, EPS_LOGICAL_ADDRESS)
   transport = Tp20Transport(panda, module, args.bus, debug=args.debug)
   atexit.register(transport.close)
@@ -392,7 +469,7 @@ def main() -> None:
   session = kwp.request(b"\x10\x89", busy_retries=5)
   expect_prefix(session, b"\x50\x89", "diagnostic session")
 
-  if args.action == "abs-info":
+  if args.action in ("abs-info", "abs-acc-enable", "abs-stock-restore"):
     part_number = read_did(kwp, 0xF187).decode("latin-1").strip(" \x00")
     software = read_did(kwp, 0xF189).decode("latin-1").strip(" \x00")
     component = read_did(kwp, 0xF197).decode("latin-1").strip(" \x00")
@@ -406,11 +483,47 @@ def main() -> None:
     acc_not_installed = bool(coding[16] & (1 << 5))
     print(f"Byte 16: {coding[16]:02X}; Bit 5: {int(acc_not_installed)}")
     print(f"ACC coding state: {'NOT INSTALLED' if acc_not_installed else 'INSTALLED'}")
-    print("Read-only: no adaptation or coding write was sent.")
+    if args.action == "abs-info":
+      print("Read-only: no adaptation or coding write was sent.")
+      return
+
+    identity = parse_identity(kwp.request(b"\x1a\x9b"))
+    validate_abs_identity(identity)
+    target = ABS_ACC_CODING if args.action == "abs-acc-enable" else ABS_STOCK_CODING
+    target_label = "enable ABS ACC brake-torque interface" if args.action == "abs-acc-enable" else "restore stock ABS coding"
+    if coding == target:
+      print(f"Requested state is already active; nothing to write ({target.hex().upper()}).")
+      return
+    validate_abs_coding_transition(coding, target)
+
+    workshop_code = workshop_code_for_writing(identity.workshop_code)
+    fingerprint_request = b"\x2e\xf1\x98" + workshop_code
+    coding_request = b"\x2e\x06\x00" + target
+    print(f"Planned change: Byte 16 {coding[16]:02X} -> {target[16]:02X}; every other byte unchanged.")
+    print(f"Rollback coding: {ABS_STOCK_CODING.hex().upper()}")
+    print(f"Workshop fingerprint request: {fingerprint_request.hex(' ')}")
+    print(f"Coding request:               {coding_request.hex(' ')}")
+    if not args.experimental_long_write:
+      print("Preview only: no write sent. The --experimental-long-write gate is required in addition to typed confirmation.")
+      return
+    confirm_persistent_write(target_label)
+    print(f"Pre-write voltage: {require_safe_write_voltage(panda) / 1000:.2f} V")
+    sent_fingerprint = write_did(kwp, 0xF198, workshop_code)
+    if sent_fingerprint != fingerprint_request:
+      raise AssertionError("workshop fingerprint request changed unexpectedly")
+    print(f"Pre-coding voltage: {require_safe_write_voltage(panda) / 1000:.2f} V")
+    sent_coding = write_did(kwp, 0x0600, target)
+    if sent_coding != coding_request:
+      raise AssertionError("ABS coding request changed unexpectedly")
+    readback = read_did(kwp, 0x0600)
+    if readback != target:
+      raise DiagnosticError(f"CRITICAL: ABS accepted the write but read back {readback.hex().upper()}, expected {target.hex().upper()}")
+    print(f"ABS write accepted and verified: {readback.hex().upper()}")
+    print("Turn ignition fully off, wait at least 30 seconds, then turn ignition on and run 'abs-info'.")
     return
 
   identity = parse_identity(kwp.request(b"\x1a\x9b"))
-  if args.action == "engine-info":
+  if args.action in ("engine-info", "engine-acc-enable", "engine-stock-restore"):
     print(f"Engine: {identity.part_number} SW {identity.software} ({identity.component})")
     print(f"Current workshop code: {identity.workshop_code.hex(' ')}")
     coding_type = identity.raw[16]
@@ -422,7 +535,40 @@ def main() -> None:
       print(f"Short coding: {identity.raw[17:20].hex().upper()}")
     else:
       print(f"Unknown coding record type: {coding_type:02X}")
-    print("Read-only: no adaptation or coding write was sent.")
+    if args.action == "engine-info":
+      print("Read-only: no adaptation or coding write was sent.")
+      return
+
+    validate_engine_identity(identity)
+    target_code = ENGINE_ACC_CODE if args.action == "engine-acc-enable" else ENGINE_STOCK_CRUISE_CODE
+    target_label = "enable engine ACC without Follow-to-Stop" if args.action == "engine-acc-enable" else "restore stock engine cruise"
+    disable_request = code2_request(ENGINE_DISABLE_CRUISE_CODE)
+    target_request = code2_request(target_code)
+    print(f"Sequence: disable cruise/ACC with Code 2 {ENGINE_DISABLE_CRUISE_CODE}, then apply Code 2 {target_code}.")
+    print(f"Disable request: {disable_request.hex(' ')}")
+    print(f"Target request:  {target_request.hex(' ')}")
+    print(f"Rollback sequence: {ENGINE_DISABLE_CRUISE_CODE} then {ENGINE_STOCK_CRUISE_CODE}.")
+    print("Code 30903 is deliberately not offered: it selects Follow-to-Stop/Front Assist and is inappropriate for this radarless H31 test.")
+    if not args.experimental_long_write:
+      print("Preview only: no write sent. The --experimental-long-write gate is required in addition to typed confirmation.")
+      return
+    confirm_persistent_write(target_label)
+    print(f"Pre-write voltage: {require_safe_write_voltage(panda) / 1000:.2f} V")
+    sent_disable = apply_code2(kwp, ENGINE_DISABLE_CRUISE_CODE)
+    if sent_disable != disable_request:
+      raise AssertionError("engine disable request changed unexpectedly")
+    try:
+      print(f"Pre-target voltage: {require_safe_write_voltage(panda) / 1000:.2f} V")
+      sent_target = apply_code2(kwp, target_code)
+      if sent_target != target_request:
+        raise AssertionError("engine target request changed unexpectedly")
+    except Exception:
+      if target_code != ENGINE_STOCK_CRUISE_CODE:
+        print("ACC activation failed after disabling cruise; attempting immediate stock-cruise rollback.")
+        apply_code2(kwp, ENGINE_STOCK_CRUISE_CODE)
+      raise
+    print("Engine Code 2 sequence accepted.")
+    print("Turn ignition fully off for at least 15 seconds, then turn ignition on with the engine still off and run 'engine-info'.")
     return
 
   print(f"EPS: {identity.part_number} SW {identity.software} ({identity.component})")
