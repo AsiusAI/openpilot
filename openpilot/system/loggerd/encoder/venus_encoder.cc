@@ -96,10 +96,14 @@ VenusEncoder::VenusEncoder(const EncoderInfo &encoder_info, int in_width,
     : VideoEncoder(encoder_info, in_width, in_height),
       camera_stride(in_stride),
       camera_uv_offset(in_uv_offset) {
+  // Venus can downscale, but it cannot upscale. Keep synthetic and future
+  // lower-resolution camera streams on the hardware path.
+  out_width = std::min(out_width, in_width);
+  out_height = std::min(out_height, in_height);
   valid = initialize();
   if (!valid) {
     cleanup();
-    LOGW("Venus encoder initialization failed for %s; using software fallback",
+    LOGE("Venus encoder initialization failed for %s; encoder disabled",
          encoder_info.publish_name);
   }
 }
