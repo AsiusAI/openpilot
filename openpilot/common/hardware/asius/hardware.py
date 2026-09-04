@@ -4,7 +4,8 @@ import subprocess
 from functools import cached_property
 
 from openpilot.common.gpio import get_irqs_for_action
-from openpilot.common.hardware.base import ThermalConfig, ThermalZone
+from openpilot.common.hardware.base import HwmonThermalZone, ThermalConfig, ThermalZone
+from openpilot.common.hardware.asius.ufs import UfsHealthReader
 from openpilot.common.hardware.comma.hardware import HardwareComma
 from openpilot.common.utils import sudo_write
 
@@ -76,11 +77,20 @@ class HardwareAsius(HardwareComma):
     with open("/sys/devices/soc0/serial_number") as serial_file:
       return serial_file.read().strip()
 
+  @cached_property
+  def ufs_health(self):
+    return UfsHealthReader()
+
   def get_thermal_config(self):
     return ThermalConfig(cpu=[ThermalZone(f"cpu{i}-thermal") for i in range(8)],
                          gpu=[ThermalZone("gpuss0-thermal"), ThermalZone("gpuss1-thermal")],
                          dsp=ThermalZone("nspss0-thermal"),
-                         memory=ThermalZone("ddr-thermal"))
+                         memory=ThermalZone("ddr-thermal"),
+                         thermal_zones=[ThermalZone("ufs-thermal", label="ufsBoard"),
+                                        HwmonThermalZone("ufsCase", "ufs", poll_interval=30.)])
+
+  def get_ufs_health(self) -> dict:
+    return self.ufs_health.read()
 
   def set_power_save(self, powersave_enabled):
     _set_gpu_power_save(powersave_enabled)
@@ -88,6 +98,8 @@ class HardwareAsius(HardwareComma):
 
   def initialize_hardware(self):
     subprocess.run("sudo chmod a+w /dev/kmsg", shell=True)
+    for stats_path in glob.glob("/sys/kernel/debug/ufshcd/*/stats"):
+      subprocess.run(["sudo", "chmod", "a+r", stats_path], check=False)
     _sudo_write_if_exists("f", "/proc/irq/default_smp_affinity")
 
     _affine_irq(1, "msm_vidc")
