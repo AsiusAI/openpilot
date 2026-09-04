@@ -157,7 +157,6 @@ class WifiState:
 class WifiManager:
   def __init__(self):
     self._networks: list[Network] = []  # an unsorted list of available Networks. a Network can be comprised of multiple APs
-    self._access_points: dict[str, list[AccessPoint]] = {}
     self._active = True  # used to not run when not in settings
     self._exit = False
 
@@ -637,8 +636,6 @@ class WifiManager:
     def worker():
       # Clear all connections that may already exist to the network we are connecting to
       self.forget_connection(ssid, block=True)
-      access_points = getattr(self, '_access_points', {}).get(ssid, [])
-      specific_object = max(access_points, key=lambda ap: ap.strength).ap_path if access_points else "/"
 
       connection = {
         'connection': {
@@ -661,6 +658,8 @@ class WifiManager:
 
       if password:
         connection['802-11-wireless-security'] = {
+          'key-mgmt': ('s', 'wpa-psk'),
+          'auth-alg': ('s', 'open'),
           'psk': ('s', password),
         }
 
@@ -673,7 +672,7 @@ class WifiManager:
         return
 
       reply = self._router_main.send_and_get_reply(new_method_call(self._nm, 'AddAndActivateConnection2', 'a{sa{sv}}ooa{sv}',
-                                                                   (connection, self._wifi_device, specific_object, {'persist': ('s', 'volatile')})))
+                                                                   (connection, self._wifi_device, "/", {'persist': ('s', 'volatile')})))
 
       if reply.header.message_type == MessageType.error:
         cloudlog.warning(f"Failed to add and activate connection for {ssid}: {reply}")
@@ -893,7 +892,6 @@ class WifiManager:
             # catch all for parsing errors
             cloudlog.exception(f"Failed to parse AP properties for {ap_path}")
 
-        self._access_points = aps
         self._networks = [Network.from_dbus(ssid, ap_list, ssid == self._tethering_ssid) for ssid, ap_list in aps.items()]
         self._update_active_connection_info()
         self._enqueue_callbacks(self._networks_updated, self.networks)  # sorted

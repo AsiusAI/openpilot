@@ -22,8 +22,7 @@ public:
   static cereal::InitData::DeviceType get_device_type() {
     static const std::map<std::string, cereal::InitData::DeviceType> device_map = {
       {"tizi", cereal::InitData::DeviceType::TIZI},
-      {"mici", cereal::InitData::DeviceType::MICI},
-      {"v0", cereal::InitData::DeviceType::V0},
+      {"mici", cereal::InitData::DeviceType::MICI}
     };
     static const auto it = device_map.find(get_name());
     assert(it != device_map.end());

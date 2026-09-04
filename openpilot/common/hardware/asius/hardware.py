@@ -92,8 +92,6 @@ class HardwareAsius(HardwareComma):
 
     _affine_irq(1, "msm_vidc")
     _affine_irq(1, "i2c_geni")
-    _affine_irq(5, "fts_ts")
-    _affine_irq(5, "msm_drm")
 
     sudo_write("userspace", "/sys/class/devfreq/3d00000.gpu/governor")
     sudo_write("812000000", "/sys/class/devfreq/3d00000.gpu/userspace/set_freq")

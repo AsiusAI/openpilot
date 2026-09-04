@@ -35,7 +35,7 @@ GITHUB = GithubUtils(API_TOKEN, DATA_TOKEN)
 
 EXEC_TIMINGS = [
   # model, instant max, average max, Chestnut average max
-  ("modelV2", 0.05, 0.028, 0.05),
+  ("modelV2", 0.05, 0.028 if ASIUS_HARDWARE else 0.03, 0.05),
 ]
 if not NO_DCAM:
   EXEC_TIMINGS.append(("driverStateV2", 0.05, 0.018, 0.018))

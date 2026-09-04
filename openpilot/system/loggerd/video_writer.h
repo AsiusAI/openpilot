@@ -22,7 +22,6 @@ public:
 private:
   void initialize_audio(int sample_rate);
   void encode_and_write_audio_frame(AVFrame* frame);
-  void write_buffered_audio();
   void process_remaining_audio();
 
   std::string vid_path, lock_path;
@@ -37,9 +36,7 @@ private:
   AVStream *audio_stream = nullptr;
   AVCodecContext *audio_codec_ctx = nullptr;
   AVFrame *audio_frame = nullptr;
-  int64_t first_video_timestamp = AV_NOPTS_VALUE;
-  int64_t first_audio_timestamp = AV_NOPTS_VALUE;
-  int64_t audio_pts = AV_NOPTS_VALUE;
+  uint64_t audio_pts = 0;
   int64_t next_video_pts = 0;
   int fps = 0;
   std::deque<float> audio_buffer;

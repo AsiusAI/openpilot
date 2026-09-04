@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import time
 import unittest
 import numpy as np
@@ -15,7 +16,7 @@ from openpilot.selfdrive.test.helpers import collect_logs, log_collector, proces
 TEST_TIMESPAN = 10
 CAMERAS = ('narrowRoadCameraState', 'cabinCameraState', 'wideRoadCameraState')
 EXPOSURE_STABLE_COUNT = 3
-EXPOSURE_RANGE = (0.10, 0.65)
+EXPOSURE_RANGE = (0.10, 0.65) if ASIUS_HARDWARE else (0.15, 0.35)
 MAX_TEST_TIME = 25
 STARTUP_FRAME_IGNORE = 10
 MAX_ISOLATED_FRAME_DROPS = 2
@@ -68,13 +69,15 @@ def _camera_session():
     cnt = len(ts[cam]['t'])
     assert expected_frames*0.8 < cnt < expected_frames*1.2, f"unexpected frame count {cam}: {expected_frames=}, got {cnt}"
 
-    timestamps = ts[cam]['timestampSof'][STARTUP_FRAME_IGNORE:] / 1e6
+    timestamps = ts[cam]['timestampSof'][STARTUP_FRAME_IGNORE if ASIUS_HARDWARE else 0:] / 1e6
     dts = np.abs(np.diff(timestamps) - 1000/SERVICE_LIST[cam].frequency)
-    bad_intervals = np.count_nonzero(dts >= 1.0)
-    assert bad_intervals <= MAX_ISOLATED_FRAME_DROPS, \
-      f"{cam} dts(ms) out of spec: {bad_intervals} bad intervals, " \
-      f"max diff {dts.max()}, 99 percentile {np.percentile(dts, 99)}"
-    assert dts.max() < 1000/SERVICE_LIST[cam].frequency + 1.0, f"{cam} dropped consecutive frames"
+    if ASIUS_HARDWARE:
+      bad_intervals = np.count_nonzero(dts >= 1.0)
+      assert bad_intervals <= MAX_ISOLATED_FRAME_DROPS, \
+        f"{cam} dts(ms) out of spec: {bad_intervals} bad intervals, max diff {dts.max()}, 99 percentile {np.percentile(dts, 99)}"
+      assert dts.max() < 1000/SERVICE_LIST[cam].frequency + 1.0, f"{cam} dropped consecutive frames"
+    else:
+      assert (dts < 1.0).all(), f"{cam} dts(ms) out of spec: max diff {dts.max()}, 99 percentile {np.percentile(dts, 99)}"
 
   return ts, exposure
 
@@ -159,7 +162,25 @@ class TestCamerad(OpenpilotTestCase):
       assert np.all((ts[c]['t'] - ts[c]['timestampSof']/1e9) > 1e-7)
 
       # EOF timestamps can be reconstructed from SOF or supplied directly by the camera driver.
+      if not ASIUS_HARDWARE:
+        # logMonoTime > EOF, needs some tolerance since EOF is (SOF + readout time) but there is noise in the SOF timestamping (done via IRQ)
+        assert np.mean((ts[c]['t'] - ts[c]['timestampEof']/1e9) > 1e-7) > 0.7  # should be mostly logMonoTime > EOF
       assert np.all((ts[c]['t'] - ts[c]['timestampEof']/1e9) > -0.10)        # when EOF > logMonoTime, it should never be more than two frames
+
+  @unittest.skipIf(ASIUS_HARDWARE, "Spectra fault injection is unavailable on Asius")
+  def test_stress_test(self):
+    os.environ['SPECTRA_ERROR_PROB'] = '0.008'
+    try:
+      logs = run_and_log(["camerad", ], CAMERAS, 10)
+    finally:
+      del os.environ['SPECTRA_ERROR_PROB']
+    ts = msgs_to_time_series(logs)
+
+    # we should see some jumps from introduced errors
+    assert np.max([np.max(np.diff(ts[c]['frameId'])) for c in CAMERAS]) > 1
+    assert np.max([np.max(np.diff(ts[c]['requestId'])) for c in CAMERAS]) > 1
+
+    self._sanity_checks(ts)
 
 if __name__ == "__main__":
   unittest.main()

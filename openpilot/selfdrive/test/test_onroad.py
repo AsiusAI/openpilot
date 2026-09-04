@@ -19,6 +19,7 @@ from openpilot.cereal.services import SERVICE_LIST
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.timeout import Timeout
 from openpilot.common.params import Params
+from openpilot.common.hardware import ASIUS_HARDWARE
 from openpilot.selfdrive.selfdrived.events import EVENTS, ET
 from openpilot.selfdrive.test.helpers import set_params_enabled, release_only
 from openpilot.common.hardware.hw import Paths
@@ -95,9 +96,10 @@ TIMINGS = {
 LOGS_SIZE = {  # MB per segment
   "qlog.zst": 0.5,
   "rlog.zst": 8.1,
-  "qcamera.mp4": 2.3,
+  "qcamera.mp4" if ASIUS_HARDWARE else "qcamera.ts": 2.3,
 }
-LOGS_SIZE.update(dict.fromkeys(['ecamera.mp4', 'fcamera.mp4', 'dcamera.mp4'], 76.5))
+camera_extension = "mp4" if ASIUS_HARDWARE else "hevc"
+LOGS_SIZE.update(dict.fromkeys([f'{camera}.{camera_extension}' for camera in ('ecamera', 'fcamera', 'dcamera')], 76.5))
 
 
 def cputime_total(ct):
