@@ -43,7 +43,7 @@ class ParamsReader(Protocol):
   def get(self, key: str) -> Any: ...
 
 
-ATHENA_HOST = Params().get("WebsocketHost", return_default=True)
+RELAY_HOST = Params().get("WebsocketHost", return_default=True)
 
 RECONNECT_TIMEOUT_S = 70
 WS_FRAME_SIZE = 4096
@@ -894,7 +894,9 @@ def handle_peer_message(data: str) -> bool:
     if dongle_id is None:
       return True
 
-    peer_message = unpack_peer_message(data, dongle_id)
+    # The relay authenticates each live connection and enforces increasing sequence
+    # numbers. E2E signatures are still verified; the device wall clock is irrelevant.
+    peer_message = unpack_peer_message(data, dongle_id, validate_timestamp=False)
     if peer_message is None:
       return False
 
@@ -938,15 +940,31 @@ def handle_peer_message(data: str) -> bool:
 
 def ws_recv(ws: WebSocket, end_event: threading.Event) -> None:
   last_ping = int(time.monotonic() * 1e9)
+  last_ping_sent = 0.0
+  received_sequences: dict[tuple[str, str], int] = {}
   while not end_event.is_set():
     try:
+      # Cloudflare's hibernating relay answers control pings without an object timer.
+      now = time.monotonic()
+      if now - last_ping_sent >= 25:
+        ws.ping()
+        last_ping_sent = now
       opcode, data = ws.recv_data(control_frame=True)
       if opcode in (ABNF.OPCODE_TEXT, ABNF.OPCODE_BINARY):
         if opcode == ABNF.OPCODE_TEXT:
           data = data.decode("utf-8")
         if isinstance(data, str):
+          message = json.loads(data)
+          if message.get("type") == "peer":
+            session, sequence = message.get("relaySession"), message.get("sequence")
+            key = (message.get("from"), session)
+            if not isinstance(session, str) or type(sequence) is not int or sequence <= received_sequences.get(key, 0):
+              continue
+            if len(received_sequences) >= 1024 and key not in received_sequences:
+              received_sequences.pop(next(iter(received_sequences)))
+            received_sequences[key] = sequence
           handle_peer_message(data)
-      elif opcode == ABNF.OPCODE_PING:
+      elif opcode in (ABNF.OPCODE_PING, ABNF.OPCODE_PONG):
         last_ping = int(time.monotonic() * 1e9)
         Params().put("LastAthenaPingTime", last_ping, block=True)
     except WebSocketTimeoutException:
@@ -960,12 +978,17 @@ def ws_recv(ws: WebSocket, end_event: threading.Event) -> None:
 
 
 def ws_send(ws: WebSocket, end_event: threading.Event) -> None:
+  sequence = 0
   while not end_event.is_set():
     try:
       data = send_queue.get(timeout=1)
       try:
-        if json.loads(data).get("type") != "peer":
+        message = json.loads(data)
+        if message.get("type") != "peer":
           continue
+        sequence += 1
+        message["sequence"] = sequence
+        data = json.dumps(message)
       except Exception:
         continue
       for i in range(0, len(data), WS_FRAME_SIZE):
