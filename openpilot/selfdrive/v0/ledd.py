@@ -68,6 +68,7 @@ GREEN = LedState("green", 0, 180, 35)
 YELLOW = LedState("yellow", 180, 130, 0)
 BROWN = LedState("brown", 120, 75, 20)
 RED = LedState("red", 180, 0, 0)
+DM_WARNING = LedState("dm_warning", 180, 0, 180)
 OFF = LedState("off", 0, 0, 0)
 
 WARNING_ALERT_SOUNDS = {
@@ -339,6 +340,20 @@ def persistent_error(sm) -> bool:
   return panda_disconnected(sm)
 
 
+def driver_monitoring_warning(sm) -> bool:
+  if sm.seen['selfdriveState'] and sm.alive['selfdriveState']:
+    if sm['selfdriveState'].alertType.split('/')[0] in {
+      'driverDistracted1', 'driverDistracted2', 'driverDistracted3',
+      'driverUnresponsive1', 'driverUnresponsive2', 'driverUnresponsive3', 'tooDistracted',
+    }:
+      return True
+
+  if sm.seen['driverMonitoringState'] and sm.alive['driverMonitoringState']:
+    dm_state = sm['driverMonitoringState']
+    return dm_state.lockout or dm_state.alwaysOnLockout or dm_state.alertLevel != log.DriverMonitoringState.AlertLevel.none
+  return False
+
+
 def engaged_warning(sm) -> bool:
   if not sm.seen['selfdriveState'] or not sm.alive['selfdriveState']:
     return False
@@ -346,10 +361,6 @@ def engaged_warning(sm) -> bool:
   selfdrive_state = sm['selfdriveState']
   if not selfdrive_state.active:
     return False
-
-  if sm.seen['driverMonitoringState'] and sm.alive['driverMonitoringState']:
-    if sm['driverMonitoringState'].alertLevel != log.DriverMonitoringState.AlertLevel.none:
-      return True
 
   return (
     selfdrive_state.state == log.SelfdriveState.OpenpilotState.softDisabling or
@@ -415,6 +426,10 @@ def led_state(sm, now: float | None = None) -> LedState:
   selfdrive_available = selfdrive_state_available(sm)
   if selfdrive_available:
     selfdrive_state = sm['selfdriveState']
+    if selfdrive_state.state == log.SelfdriveState.OpenpilotState.softDisabling:
+      return RED
+    if driver_monitoring_warning(sm):
+      return blinking(DM_WARNING, now)
     if selfdrive_state.active:
       return blinking(RED, now) if engaged_warning(sm) else GREEN
     if sm['deviceState'].started and (

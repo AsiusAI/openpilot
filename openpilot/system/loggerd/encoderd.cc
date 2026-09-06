@@ -230,7 +230,12 @@ int main(int argc, char* argv[]) {
     int ret;
     ret = util::set_realtime_priority(52);
     assert(ret == 0);
+#ifdef __ASIUS_HARDWARE__
+    // SPI pandad is pinned to core 3 and keeps it substantially busier than USB pandad.
+    ret = util::set_core_affinity({5});
+#else
     ret = util::set_core_affinity({3});
+#endif
     assert(ret == 0);
   }
   if (argc > 1) {
