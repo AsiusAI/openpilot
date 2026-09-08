@@ -34,12 +34,13 @@ def healthy_sm(*, started=True):
     faults=[],
     heartbeatLost=False,
   )])
-  sm.set('driverMonitoringState', SimpleNamespace(alertLevel=log.DriverMonitoringState.AlertLevel.none))
+  sm.set('driverMonitoringState', SimpleNamespace(alertLevel=log.DriverMonitoringState.AlertLevel.none, lockout=False, alwaysOnLockout=False))
   sm.set('selfdriveState', SimpleNamespace(
     active=False,
     engageable=True,
     state=log.SelfdriveState.OpenpilotState.disabled,
     alertSound=SimpleNamespace(raw='none'),
+    alertType='',
   ))
   return sm
 
@@ -102,12 +103,12 @@ def test_warning_sound_blinks_red_only_while_engaged():
   assert ledd.led_state(sm, now=0.5) == ledd.OFF
 
 
-def test_driver_monitoring_blinks_red_while_engaged():
+def test_driver_monitoring_blinks_magenta_while_engaged():
   sm = healthy_sm()
   sm['selfdriveState'].active = True
   sm['selfdriveState'].state = log.SelfdriveState.OpenpilotState.enabled
   sm['driverMonitoringState'].alertLevel = log.DriverMonitoringState.AlertLevel.one
-  assert ledd.led_state(sm, now=0.) == ledd.RED
+  assert ledd.led_state(sm, now=0.) == ledd.DM_WARNING
   assert ledd.led_state(sm, now=0.5) == ledd.OFF
 
 
