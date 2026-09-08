@@ -37,7 +37,10 @@ private:
   AVCodecContext *audio_codec_ctx = nullptr;
   AVFrame *audio_frame = nullptr;
   uint64_t audio_pts = 0;
+  int64_t next_video_pts = 0;
+  int fps = 0;
   std::deque<float> audio_buffer;
 
   bool remuxing;
+  bool fragmented_mp4 = false;
 };

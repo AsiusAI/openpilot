@@ -12,7 +12,7 @@ from openpilot.common.version import get_build_metadata
 ATHENA_MGR_PID_PARAM = "AthenadPid"
 
 
-def main():
+def manage(module: str, process_name: str, pid_param: str) -> None:
   params = Params()
   dongle_id = params.get("DongleId")
   build_metadata = get_build_metadata()
@@ -27,16 +27,20 @@ def main():
 
   try:
     while 1:
-      cloudlog.info("starting athena daemon")
-      proc = Process(name='athenad', target=launcher, args=('openpilot.system.athena.athenad', 'athenad'))
+      cloudlog.info(f"starting {process_name}")
+      proc = Process(name=process_name, target=launcher, args=(module, process_name))
       proc.start()
       proc.join()
-      cloudlog.event("athenad exited", exitcode=proc.exitcode)
+      cloudlog.event(f"{process_name} exited", exitcode=proc.exitcode)
       time.sleep(5)
   except Exception:
-    cloudlog.exception("manage_athenad.exception")
+    cloudlog.exception(f"manage_{process_name}.exception")
   finally:
-    params.remove(ATHENA_MGR_PID_PARAM)
+    params.remove(pid_param)
+
+
+def main():
+  manage("openpilot.system.athena.athenad", "athenad", ATHENA_MGR_PID_PARAM)
 
 
 if __name__ == '__main__':

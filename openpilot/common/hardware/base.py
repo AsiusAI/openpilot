@@ -1,4 +1,5 @@
 import os
+import time
 from abc import abstractmethod, ABC
 from dataclasses import dataclass, fields
 
@@ -13,6 +14,7 @@ class ThermalZone:
   # a zone from /sys/class/thermal/thermal_zone*
   name: str             # a.k.a type
   scale: float = 1000.  # scale to get degrees in C
+  label: str | None = None
   zone_number = -1
 
   def read(self) -> float:
@@ -31,6 +33,56 @@ class ThermalZone:
     except FileNotFoundError:
       return 0
 
+
+class HwmonThermalZone(ThermalZone):
+  def __init__(self, name: str, hwmon_name: str, attribute: str = "temp1_input", scale: float = 1000.,
+               poll_interval: float = 30., hwmon_root: str = "/sys/class/hwmon"):
+    super().__init__(name, scale)
+    self.hwmon_name = hwmon_name
+    self.attribute = attribute
+    self.poll_interval = poll_interval
+    self.hwmon_root = hwmon_root
+    self._path: str | None = None
+    self._last_read: float | None = None
+    self._temperature = 0.
+
+  def _find_path(self) -> str | None:
+    try:
+      hwmon_devices = os.listdir(self.hwmon_root)
+    except FileNotFoundError:
+      return None
+
+    for device in hwmon_devices:
+      device_path = os.path.join(self.hwmon_root, device)
+      try:
+        with open(os.path.join(device_path, "name")) as f:
+          if f.read().strip() == self.hwmon_name:
+            return os.path.join(device_path, self.attribute)
+      except OSError:
+        continue
+    return None
+
+  def read(self) -> float:
+    now = time.monotonic()
+    if self._last_read is not None and now - self._last_read < self.poll_interval:
+      return self._temperature
+    self._last_read = now
+
+    if self._path is None:
+      self._path = self._find_path()
+    if self._path is None:
+      return self._temperature
+
+    try:
+      with open(self._path) as f:
+        self._temperature = int(f.read()) / self.scale
+    except FileNotFoundError:
+      self._path = None
+    except (OSError, ValueError):
+      pass
+    return self._temperature
+
+
 @dataclass
 class ThermalConfig:
   cpu: list[ThermalZone] | None = None
@@ -42,13 +94,17 @@ class ThermalConfig:
   exhaust: ThermalZone | None = None
   gnss: ThermalZone | None = None
   bottomSoc: ThermalZone | None = None
+  thermal_zones: list[ThermalZone] | None = None
 
   def get_msg(self):
     ret = {}
     for f in fields(ThermalConfig):
       v = getattr(self, f.name)
       if v is not None:
-        if isinstance(v, list):
+        if f.name == "thermal_zones":
+          zones = [(x, x.read()) for x in v]
+          ret["thermalZones"] = [{"name": x.label or x.name, "temp": temp} for x, temp in zones if temp != 0]
+        elif isinstance(v, list):
           ret[f.name + "TempC"] = [x.read() for x in v]
         else:
           ret[f.name + "TempC"] = v.read()
@@ -146,6 +202,9 @@ class HardwareBase(ABC):
     return []
 
   def get_modem_state(self) -> dict:
+    return {}
+
+  def get_ufs_health(self) -> dict:
     return {}
 
   def initialize_hardware(self):

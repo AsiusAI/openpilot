@@ -50,6 +50,8 @@ _ar_ox_fisheye = CameraConfig(1928, 1208, 567.0)  # focal length probably wrong?
 _os_fisheye = CameraConfig(2688 // 2, 1520 // 2, 567.0 / 4 * 3)
 _ar_ox_config = DeviceCameraConfig(CameraConfig(1928, 1208, 2648.0), _ar_ox_fisheye, _ar_ox_fisheye)
 _os_config = DeviceCameraConfig(CameraConfig(2688 // 2, 1520 // 2, 1522.0 * 3 / 4), _os_fisheye, _os_fisheye)
+# Scale the measured 3.82 mm / 951 px calibration to the 4.35 mm road lens.
+_asius_os_config = DeviceCameraConfig(CameraConfig(2688 // 2, 1520 // 2, 1083.0), _os_fisheye, _os_fisheye)
 _neo_config = DeviceCameraConfig(CameraConfig(1164, 874, 910.0), CameraConfig(816, 612, 650.0), _NoneCameraConfig())
 
 DEVICE_CAMERAS: dict[tuple[str, str], DeviceCameraConfig] = {
@@ -69,6 +71,7 @@ DEVICE_CAMERAS: dict[tuple[str, str], DeviceCameraConfig] = {
 }
 prods = itertools.product(('tici', 'tizi', 'mici'), (('ar0231', _ar_ox_config), ('ox03c10', _ar_ox_config), ('os04c10', _os_config)))
 DEVICE_CAMERAS.update({(d, c[0]): c[1] for d, c in prods})
+DEVICE_CAMERAS[("v0", "os04c10")] = _asius_os_config
 
 # device/mesh : x->forward, y-> right, z->down
 # view : x->right, y->down, z->forward

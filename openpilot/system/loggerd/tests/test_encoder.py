@@ -4,16 +4,18 @@ import math
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import unittest
 from pathlib import Path
 
+import numpy as np
 from tqdm import trange
 
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.common.params import Params
 from openpilot.common.timeout import Timeout
-from openpilot.common.hardware import COMMA_HARDWARE
+from openpilot.common.hardware import ASIUS_HARDWARE, COMMA_HARDWARE
 from openpilot.system.manager.process_config import managed_processes
 from openpilot.tools.lib.logreader import LogReader
 from openpilot.common.hardware.hw import Paths
@@ -22,20 +24,25 @@ SEGMENT_LENGTH = 2
 FULL_SIZE = 2507572
 def hevc_size(w): return FULL_SIZE // 2 if w <= 1344 else FULL_SIZE
 CAMERAS = [
-  ("fcamera.hevc", 20, hevc_size, "narrowRoadEncodeIdx"),
-  ("dcamera.hevc", 20, hevc_size, "cabinEncodeIdx"),
-  ("ecamera.hevc", 20, hevc_size, "wideRoadEncodeIdx"),
-  ("qcamera.ts", 20, lambda x: 130000, None),
+  (f"fcamera.{('mp4' if ASIUS_HARDWARE else 'hevc')}", 20, hevc_size, "narrowRoadEncodeIdx"),
+  (f"dcamera.{('mp4' if ASIUS_HARDWARE else 'hevc')}", 20, hevc_size, "cabinEncodeIdx"),
+  (f"ecamera.{('mp4' if ASIUS_HARDWARE else 'hevc')}", 20, hevc_size, "wideRoadEncodeIdx"),
+  (f"qcamera.{('mp4' if ASIUS_HARDWARE else 'ts')}", 20, lambda x: 130000, None),
 ]
+WARMUP_SEGMENTS = 1 if ASIUS_HARDWARE else 0
 
 # we check frame count, so we don't have to be too strict on size
-FILE_SIZE_TOLERANCE = 0.7
+FILE_SIZE_TOLERANCE = 0.9 if ASIUS_HARDWARE else 0.7
 
 
 class TestEncoder(OpenpilotTestCase):
   COMMA_HARDWARE_TEST = True
 
   def setup_method(self):
+    # Hardware log_root() otherwise points at the device's real recordings.
+    log_dir = tempfile.TemporaryDirectory(prefix="encoder-test-", dir="/data" if ASIUS_HARDWARE or COMMA_HARDWARE else None)
+    self.addCleanup(log_dir.cleanup)
+    os.environ["LOG_ROOT"] = log_dir.name
     self._clear_logs()
     os.environ["LOGGERD_TEST"] = "1"
     os.environ["LOGGERD_SEGMENT_LENGTH"] = str(SEGMENT_LENGTH)
@@ -62,7 +69,7 @@ class TestEncoder(OpenpilotTestCase):
     time.sleep(1.0)
     managed_processes['camerad'].start()
 
-    num_segments = 3
+    num_segments = 3 + WARMUP_SEGMENTS
 
     # wait for loggerd to make the dir for first segment
     route_prefix_path = None
@@ -93,9 +100,13 @@ class TestEncoder(OpenpilotTestCase):
         probe = subprocess.check_output(cmd, shell=True, encoding='utf8').split('\n')[0].strip().split(',')
         frame_width, frame_count = int(probe[0]), int(probe[1])
         counts.append(frame_count)
-
-        assert frame_count == expected_frames, \
-                         f"segment #{i}: {camera} failed frame count check: expected {expected_frames}, got {frame_count}"
+        if ASIUS_HARDWARE:
+          min_frames = expected_frames - fps
+          assert min_frames <= frame_count <= expected_frames, \
+            f"segment #{i}: {camera} expected {min_frames}-{expected_frames} frames, got {frame_count}"
+        else:
+          assert frame_count == expected_frames, \
+            f"segment #{i}: {camera} failed frame count check: expected {expected_frames}, got {frame_count}"
 
         # sanity check file size
         file_size = os.path.getsize(file_path)
@@ -113,35 +124,49 @@ class TestEncoder(OpenpilotTestCase):
           segment_idxs = [m.segmentId for m in encode_msgs]
           encode_idxs = [m.encodeId for m in encode_msgs]
           frame_idxs = [m.frameId for m in encode_msgs]
-
           # Check frame count
           assert frame_count == len(segment_idxs)
           assert frame_count == len(encode_idxs)
 
           # Check for duplicates or skips
-          assert 0 == segment_idxs[0]
+          if ASIUS_HARDWARE:
+            assert 0 <= segment_idxs[0] < fps
+          else:
+            assert segment_idxs[0] == 0
           assert len(set(segment_idxs)) == len(segment_idxs)
+          if ASIUS_HARDWARE:
+            assert set(np.diff(segment_idxs)) == {1, }
 
           assert all(valid)
 
-          assert expected_frames * i == encode_idxs[0]
+          if not ASIUS_HARDWARE:
+            assert expected_frames * i == encode_idxs[0]
           first_frames.append(frame_idxs[0])
           assert len(set(encode_idxs)) == len(encode_idxs)
+          if ASIUS_HARDWARE:
+            assert set(np.diff(encode_idxs)) == {1, }
 
-      assert 1 == len(set(first_frames))
+      if not ASIUS_HARDWARE:
+        assert 1 == len(set(first_frames))
 
       if COMMA_HARDWARE:
-        expected_frames = fps * SEGMENT_LENGTH
-        assert min(counts) == expected_frames
+        assert min(counts) == fps * SEGMENT_LENGTH
       shutil.rmtree(f"{route_prefix_path}--{i}")
 
+    rotation_start = time.monotonic() if ASIUS_HARDWARE else 0.0
     try:
       for i in trange(num_segments):
         # poll for next segment
         with Timeout(int(SEGMENT_LENGTH*10), error_msg=f"timed out waiting for segment {i}"):
           while Path(f"{route_prefix_path}--{i+1}") not in Path(Paths.log_root()).iterdir():
             time.sleep(0.1)
-        check_seg(i)
+        if i < WARMUP_SEGMENTS:
+          shutil.rmtree(f"{route_prefix_path}--{i}")
+        else:
+          check_seg(i)
+      if ASIUS_HARDWARE:
+        elapsed = time.monotonic() - rotation_start
+        assert elapsed < SEGMENT_LENGTH * (num_segments + 2), f"encoder rotation took {elapsed:.1f}s"
     finally:
       managed_processes['loggerd'].stop()
       managed_processes['encoderd'].stop()

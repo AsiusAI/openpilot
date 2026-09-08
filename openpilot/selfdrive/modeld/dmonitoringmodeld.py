@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os
-from openpilot.selfdrive.modeld.helpers import MODELS_DIR, get_tg_input_devices
+from openpilot.selfdrive.modeld.helpers import MODELS_DIR, get_tg_input_devices, tensor_from_dma_buf
 from tinygrad.tensor import Tensor
 import time
 import pickle
@@ -43,7 +43,7 @@ class ModelState:
     self.warp_inputs = {k: Tensor(v, device='NPY') for k,v in self.warp_inputs_np.items()}
     self.frame_buf_params = get_nv12_info(cam_w, cam_h)
     self.tensor_inputs = {k: Tensor(v, device='NPY').realize() for k,v in self.numpy_inputs.items()}
-    self._blob_cache : dict[int, Tensor] = {}
+    self._blob_cache: dict[tuple[int, int], Tensor] = {}
     self.model_run = pickle.load(open_file_chunked(str(MODEL_PKL_PATH)))
     with open(MODELS_DIR / f'dm_warp_{cam_w}x{cam_h}_tinygrad.pkl', "rb") as f:
       self.image_warp = pickle.load(f)
@@ -55,11 +55,12 @@ class ModelState:
 
     ptr = np.frombuffer(buf.data, dtype=np.uint8).ctypes.data
     # There is a ringbuffer of imgs, just cache tensors pointing to all of them
-    if ptr not in self._blob_cache:
-      self._blob_cache[ptr] = Tensor.from_blob(ptr, (self.frame_buf_params[3],), dtype='uint8', device=self.DEV)
+    cache_key = (ptr, buf.fd)
+    if cache_key not in self._blob_cache:
+      self._blob_cache[cache_key] = tensor_from_dma_buf(ptr, buf.fd, self.frame_buf_params[3], self.DEV)
 
     self.warp_inputs_np['transform'][:] = transform[:]
-    self.tensor_inputs['input_img'] = self.image_warp(self._blob_cache[ptr], self.warp_inputs['transform'])
+    self.tensor_inputs['input_img'] = self.image_warp(self._blob_cache[cache_key], self.warp_inputs['transform'])
 
     output = self.model_run(**self.tensor_inputs).numpy().flatten()
 

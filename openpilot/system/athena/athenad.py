@@ -63,6 +63,7 @@ WS_FRAME_SIZE = 4096
 DEVICE_STATE_UPDATE_INTERVAL = 1.0  # in seconds
 DEFAULT_UPLOAD_PRIORITY = 99  # higher number = lower priority
 CLIP_CHUNK_SIZE = 512 * 1024
+CLIP_CAMERAS = {"fcamera.hevc", "ecamera.hevc", "dcamera.hevc", "fcamera.mp4", "ecamera.mp4", "dcamera.mp4"}
 
 SEND_PRIORITY_HIGH = 0
 SEND_PRIORITY_LOW = 1
@@ -422,7 +423,7 @@ class VideoClips:
     self.lock = threading.Condition()
     self.clips: dict[str, VideoClips.Clip] = {}
     self.transcode_proc: tuple[str, subprocess.Popen] | None = None
-    threading.Thread(target=self._worker, name="video_clip", daemon=True).start()
+    self.worker_started = False
 
   def _encode(self, clip: Clip, inputs: Iterable[str], output_path: str, start_time: float, duration: float) -> None:
     inputs = list(inputs)
@@ -454,7 +455,8 @@ class VideoClips:
         process.stdin.write("ffconcat version 1.0\n")
         for path in inputs:
           escaped_path = path.replace("'", "'\\''")
-          process.stdin.write(f"file 'file:{escaped_path}'\noption framerate {CAMERA_FPS}\nduration {SEGMENT_LENGTH}\n")
+          framerate = f"option framerate {CAMERA_FPS}\n" if clip.camera.endswith(".hevc") else ""
+          process.stdin.write(f"file 'file:{escaped_path}'\n{framerate}duration {SEGMENT_LENGTH}\n")
         process.stdin.close()
       process.wait()
       if process.returncode != 0:
@@ -542,7 +544,7 @@ class VideoClips:
             continue
           with os.scandir(entry.path) as files:
             for camera in files:
-              if camera.is_file() and camera.name.endswith("camera.hevc"):
+              if camera.is_file() and camera.name in CLIP_CAMERAS:
                 cameras.setdefault(camera.name, []).append(int(segment))
     except OSError:
       return {}
@@ -566,9 +568,12 @@ class VideoClips:
     route_name = route_match.group("log_id")
     camera = clip["camera"]
     filename = clip["filename"]
-    assert camera == os.path.basename(camera) and camera.endswith("camera.hevc"), "invalid camera filename"
+    assert camera == os.path.basename(camera) and camera in CLIP_CAMERAS, "invalid camera filename"
     assert filename == os.path.basename(filename), "invalid filename"
     with self.lock:
+      if not self.worker_started:
+        threading.Thread(target=self._worker, name="video_clip", daemon=True).start()
+        self.worker_started = True
       self.clips[filename] = self.Clip(route_name, camera, source_start_time, source_end_time, clip["bitrate"], clip["speedup"],
                                         filename, datetime.now().timestamp())
       self.lock.notify()

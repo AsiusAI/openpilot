@@ -302,6 +302,8 @@ def hardware_thread(end_event, hw_queue) -> None:
       msg.deviceState.networkInfo = last_hw_state.network_info
 
     msg.deviceState.modemTempC = last_hw_state.modem_temps
+    if ufs_health := HARDWARE.get_ufs_health():
+      msg.deviceState.ufsHealth = ufs_health
 
     msg.deviceState.screenBrightnessPercent = HARDWARE.get_screen_brightness()
 

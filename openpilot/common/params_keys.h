@@ -5,6 +5,14 @@
 
 #include "openpilot/cereal/gen/cpp/log.capnp.h"
 
+#ifdef __ASIUS_HARDWARE__
+inline constexpr char COMPLETED_TRAINING_VERSION_DEFAULT[] = "0.2.0";
+inline constexpr char ACCEPTED_TERMS_VERSION_DEFAULT[] = "2";
+#else
+inline constexpr char COMPLETED_TRAINING_VERSION_DEFAULT[] = "0";
+inline constexpr char ACCEPTED_TERMS_VERSION_DEFAULT[] = "0";
+#endif
+
 inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"AccessToken", {CLEAR_ON_MANAGER_START | DONT_LOG, STRING}},
     {"AdbEnabled", {PERSISTENT, BOOL}},
@@ -13,6 +21,11 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"ApiCache_FirehoseStats", {PERSISTENT, JSON}},
     {"AssistNowToken", {PERSISTENT, STRING}},
     {"AthenadPid", {PERSISTENT, INT}},
+    {"BluetoothdPid", {PERSISTENT, INT}},
+    {"WebsocketHost", {PERSISTENT, STRING, "wss://relay.asius.ai"}},
+    {"WebsocketdPid", {PERSISTENT, INT}},
+    {"AppAuthorizedKeys", {PERSISTENT, JSON}},
+    {"AppPairingUntil", {PERSISTENT, INT}},
     {"AthenadUploadQueue", {PERSISTENT, JSON}},
     {"AthenadRecentlyViewedRoutes", {PERSISTENT, STRING}},
     {"BootCount", {PERSISTENT, INT}},
@@ -24,10 +37,13 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"CarParamsCache", {CLEAR_ON_MANAGER_START, BYTES}},
     {"CarParamsPersistent", {PERSISTENT, BYTES}},
     {"CarParamsPrevRoute", {PERSISTENT, BYTES}},
-    {"CompletedTrainingVersion", {PERSISTENT, STRING, "0"}},
+    {"CompletedTrainingVersion", {PERSISTENT, STRING, COMPLETED_TRAINING_VERSION_DEFAULT}},
     {"ControlsReady", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL}},
     {"CurrentBootlog", {PERSISTENT, STRING}},
     {"CurrentRoute", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
+    {"DataApiHost", {PERSISTENT, STRING, "https://api.asius.ai"}},
+    {"DataUploadEnabled", {PERSISTENT, BOOL, "1"}},
+    {"DataUploadState", {PERSISTENT | DONT_LOG, JSON}},
     {"DisableLogging", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL}},
     {"DisablePowerDown", {PERSISTENT, BOOL}},
     {"DisableUpdates", {PERSISTENT, BOOL}},
@@ -54,7 +70,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"GsmMetered", {PERSISTENT, BOOL, "1"}},
     {"GsmRoaming", {PERSISTENT, BOOL}},
     {"HardwareSerial", {PERSISTENT, STRING}},
-    {"HasAcceptedTerms", {PERSISTENT, STRING, "0"}},
+    {"HasAcceptedTerms", {PERSISTENT, STRING, ACCEPTED_TERMS_VERSION_DEFAULT}},
     {"InstallDate", {PERSISTENT, TIME}},
     {"IsDriverViewEnabled", {CLEAR_ON_MANAGER_START, BOOL}},
     {"IsEngaged", {PERSISTENT, BOOL}},
@@ -115,6 +131,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RecordFront", {PERSISTENT, BOOL}},
     {"RecordFrontLock", {PERSISTENT, BOOL}},  // for the internal fleet
     {"SecOCKey", {PERSISTENT | DONT_LOG, STRING}},
+    {"ShareDrivingData", {PERSISTENT, BOOL, "0"}},
     {"ShowDebugInfo", {PERSISTENT, BOOL}},
     {"RouteCount", {PERSISTENT, INT, "0"}},
     {"SnoozeUpdate", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
@@ -128,6 +145,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"UpdaterFetchAvailable", {CLEAR_ON_MANAGER_START, BOOL}},
     {"UpdaterNewDescription", {CLEAR_ON_MANAGER_START, STRING}},
     {"UpdaterNewReleaseNotes", {CLEAR_ON_MANAGER_START, BYTES}},
+    {"UpdaterProgress", {CLEAR_ON_MANAGER_START, INT}},
     {"UpdaterState", {CLEAR_ON_MANAGER_START, STRING}},
     {"UpdaterTargetBranch", {CLEAR_ON_MANAGER_START, STRING}},
     {"UpdaterLastFetchTime", {PERSISTENT, TIME}},

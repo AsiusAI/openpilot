@@ -1,7 +1,9 @@
 #include <cmath>
 
 #include "system/camerad/sensors/sensor.h"
+#ifndef __ASIUS_HARDWARE__
 #include <media/msm_camsensor_sdk.h>
+#endif
 
 namespace {
 

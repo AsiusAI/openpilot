@@ -5,9 +5,12 @@
 #include "common/hardware/base.h"
 #include "common/util.h"
 
-#if __COMMA_HARDWARE__
+#if defined(__COMMA_HARDWARE__)
 #include "common/hardware/comma/hardware.h"
 #define Hardware HardwareComma
+#elif defined(__ASIUS_HARDWARE__)
+#include "common/hardware/asius/hardware.h"
+#define Hardware HardwareAsius
 #else
 #include "common/hardware/pc/hardware.h"
 #define Hardware HardwarePC

@@ -12,10 +12,10 @@
 
 #ifdef __COMMA_HARDWARE__
 #include "system/loggerd/encoder/v4l_encoder.h"
-#define Encoder V4LEncoder
+#elif defined(__ASIUS_HARDWARE__)
+#include "system/loggerd/encoder/venus_encoder.h"
 #else
 #include "system/loggerd/encoder/ffmpeg_encoder.h"
-#define Encoder FfmpegEncoder
 #endif
 
 ExitHandler do_exit;
@@ -51,7 +51,7 @@ bool sync_encoders(EncoderdState *s, VisionStreamType cam_type, uint32_t frame_i
   }
 }
 
-void encoder_set_bitrate(std::unique_ptr<Encoder> &e) {
+void encoder_set_bitrate(std::unique_ptr<VideoEncoder> &e) {
   static Params params;
   std::string val = params.get("LivestreamEncoderBitrate");
   if (val.empty()) return;
@@ -59,7 +59,7 @@ void encoder_set_bitrate(std::unique_ptr<Encoder> &e) {
   e->set_bitrate(bitrate);
 }
 
-void encoder_request_keyframe(std::unique_ptr<Encoder> &e) {
+void encoder_request_keyframe(std::unique_ptr<VideoEncoder> &e) {
   static Params params;
   if (!params.getBool("LivestreamRequestKeyframe")) return;
   e->request_keyframe();
@@ -68,7 +68,7 @@ void encoder_request_keyframe(std::unique_ptr<Encoder> &e) {
 void encoder_thread(EncoderdState *s, const LogCameraInfo &cam_info) {
   util::set_thread_name(cam_info.thread_name);
 
-  std::vector<std::unique_ptr<Encoder>> encoders;
+  std::vector<std::unique_ptr<VideoEncoder>> encoders;
 
   VisionIpcClient vipc_client = VisionIpcClient("camerad", cam_info.stream_type, false);
 
@@ -88,8 +88,16 @@ void encoder_thread(EncoderdState *s, const LogCameraInfo &cam_info) {
       assert(buf_info.width > 0 && buf_info.height > 0);
 
       for (const auto &encoder_info : cam_info.encoder_infos) {
-        auto &e = encoders.emplace_back(new Encoder(encoder_info, buf_info.width, buf_info.height));
+#ifdef __COMMA_HARDWARE__
+        auto e = std::make_unique<V4LEncoder>(encoder_info, buf_info.width, buf_info.height);
+#elif defined(__ASIUS_HARDWARE__)
+        auto e = std::make_unique<VenusEncoder>(encoder_info, buf_info.width, buf_info.height,
+                                                buf_info.stride, buf_info.uv_offset);
+#else
+        auto e = std::make_unique<FfmpegEncoder>(encoder_info, buf_info.width, buf_info.height);
+#endif
         e->encoder_open();
+        encoders.push_back(std::move(e));
       }
 
       // Only one thumbnail can be generated per camera stream
@@ -99,10 +107,19 @@ void encoder_thread(EncoderdState *s, const LogCameraInfo &cam_info) {
     }
 
     bool lagging = false;
+    uint64_t last_frame_ns = nanos_since_boot();
     while (!do_exit) {
       VisionIpcBufExtra extra;
       VisionBuf* buf = vipc_client.recv(&extra);
-      if (buf == nullptr) continue;
+      if (buf == nullptr) {
+        constexpr uint64_t reconnect_timeout_ns = 2ULL * 1000 * 1000 * 1000;
+        if (!vipc_client.is_connected() || nanos_since_boot() - last_frame_ns >= reconnect_timeout_ns) {
+          LOGW("encoder %s reconnecting after camera frame timeout", cam_info.thread_name);
+          break;
+        }
+        continue;
+      }
+      last_frame_ns = nanos_since_boot();
 
       // detect loop around and drop the frames
       if (buf->get_frame_id() != extra.frame_id) {
@@ -213,7 +230,12 @@ int main(int argc, char* argv[]) {
     int ret;
     ret = util::set_realtime_priority(52);
     assert(ret == 0);
+#ifdef __ASIUS_HARDWARE__
+    // SPI pandad is pinned to core 3 and keeps it substantially busier than USB pandad.
+    ret = util::set_core_affinity({5});
+#else
     ret = util::set_core_affinity({3});
+#endif
     assert(ret == 0);
   }
   if (argc > 1) {

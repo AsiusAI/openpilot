@@ -187,6 +187,7 @@ struct InitData {
     pc @5;
     tizi @6;  # comma 3X
     mici @7;  # comma four
+    v0 @8;    # asius v0
   }
 
   struct PandaInfo {
@@ -444,6 +445,9 @@ struct DeviceState @0xa4d8b5af2aa492eb {
   powerDrawW @40 :Float32;
   somPowerDrawW @42 :Float32;
 
+  # storage
+  ufsHealth @53 :UfsHealth;
+
   # device thermals
   cpuTempC @26 :List(Float32);
   gpuTempC @27 :List(Float32);
@@ -465,6 +469,32 @@ struct DeviceState @0xa4d8b5af2aa492eb {
   struct ThermalZone {
     name @0 :Text;
     temp @1 :Float32;
+  }
+
+  struct UfsHealth {
+    present @0 :Bool;
+    manufacturer @1 :Text;
+    product @2 :Text;
+    revision @3 :Text;
+    specificationVersion @4 :UInt16;
+    eolInfo @5 :UInt8;
+    lifeTimeEstimationA @6 :UInt8;
+    lifeTimeEstimationB @7 :UInt8;
+    criticalHealthCount @8 :UInt32;
+    deviceLevelExceptionCount @9 :UInt32;
+    phyErrorCount @10 :UInt64;
+    dataLinkErrorCount @11 :UInt64;
+    networkErrorCount @12 :UInt64;
+    transportErrorCount @13 :UInt64;
+    dmeErrorCount @14 :UInt64;
+    autoHibern8ErrorCount @15 :UInt64;
+    fatalErrorCount @16 :UInt64;
+    linkStartupErrorCount @17 :UInt64;
+    resumeErrorCount @18 :UInt64;
+    suspendErrorCount @19 :UInt64;
+    logicalUnitResetCount @20 :UInt64;
+    hostResetCount @21 :UInt64;
+    scsiAbortCount @22 :UInt64;
   }
 
   enum ThermalStatus {

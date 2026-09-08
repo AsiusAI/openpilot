@@ -1,0 +1,28 @@
+{
+  "manifest_version": 1,
+  "minimum_updater_version": 1,
+  "partitions": [
+    {
+      "compressed_sha256": "c740f03faba013fd372ef96517f4a04eda61f0c7828930a8d6af36d550283216",
+      "compressed_size": 14944192,
+      "compression": "xz",
+      "hash": "3da71d6385dabfda928e7b7bd57ffbb52ba0982b07eb9aaa179cd844a8aacba2",
+      "name": "esp",
+      "sha256": "3da71d6385dabfda928e7b7bd57ffbb52ba0982b07eb9aaa179cd844a8aacba2",
+      "size": 268435456,
+      "url": "https://updates.asius.ai/vamos/objects/esp-3da71d6385dabfda928e7b7bd57ffbb52ba0982b07eb9aaa179cd844a8aacba2.img.xz"
+    },
+    {
+      "compressed_sha256": "76a9540f6ce3daac4c39587217c6ad6a17e41497d868adb5d8edf5db4e4b24e0",
+      "compressed_size": 602028512,
+      "compression": "xz",
+      "hash": "b33d36849b2b9013546a10657ebb7c64c3d480b4e3b7ef7ca2e7dc1e2e201275",
+      "name": "system",
+      "sha256": "b33d36849b2b9013546a10657ebb7c64c3d480b4e3b7ef7ca2e7dc1e2e201275",
+      "size": 10737418240,
+      "url": "https://updates.asius.ai/vamos/objects/system-b33d36849b2b9013546a10657ebb7c64c3d480b4e3b7ef7ca2e7dc1e2e201275.img.xz"
+    }
+  ],
+  "product": "asius-v0",
+  "version": "18.6"
+}

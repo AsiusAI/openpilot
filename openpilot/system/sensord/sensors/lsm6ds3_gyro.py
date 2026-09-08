@@ -3,6 +3,8 @@ import math
 import time
 
 from openpilot.cereal import log
+from openpilot.common.hardware import ASIUS_HARDWARE
+from openpilot.system.sensord.sensors.asius_imu import transform_asius_imu
 from openpilot.system.sensord.sensors.i2c_sensor import Sensor
 
 class LSM6DS3_Gyro(Sensor):
@@ -70,6 +72,8 @@ class LSM6DS3_Gyro(Sensor):
     z = self.parse_16bit(b[4], b[5])
     scale = (8.75 / 1000.0) * (math.pi / 180.0)
     xyz = [y * scale, -x * scale, z * scale]
+    if ASIUS_HARDWARE:
+      xyz = transform_asius_imu(xyz)
 
     event = log.SensorEventData.new_message()
     event.timestamp = ts

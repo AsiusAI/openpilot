@@ -15,7 +15,7 @@ Route::Route(const std::string &route, const std::string &data_dir, bool auto_so
 
 RouteIdentifier Route::parseRoute(const std::string &str) {
   RouteIdentifier identifier = {};
-  static const std::regex pattern(R"(^(([a-z0-9]{16})[|_/])?(.{20})((--|/)((-?\d+(:(-?\d+)?)?)|(:-?\d+)))?$)");
+  static const std::regex pattern(R"(^(((?:[a-f0-9]{16}|[1-9A-HJ-NP-Za-km-z]{44}))[|_/])?(.{20})((--|/)((-?\d+(:(-?\d+)?)?)|(:-?\d+)))?$)");
   std::smatch match;
 
   if (std::regex_match(str, match, pattern)) {
@@ -179,13 +179,13 @@ void Route::addFileToSegment(int n, const std::string &file) {
     segments_[n].rlog = file;
   } else if (name == "qlog.bz2" || name == "qlog.zst" || name == "qlog") {
     segments_[n].qlog = file;
-  } else if (name == "fcamera.hevc") {
+  } else if (name == "fcamera.mp4" || name == "fcamera.hevc") {
     segments_[n].narrow_road_cam = file;
-  } else if (name == "dcamera.hevc") {
+  } else if (name == "dcamera.mp4" || name == "dcamera.hevc") {
     segments_[n].cabin_cam = file;
-  } else if (name == "ecamera.hevc") {
+  } else if (name == "ecamera.mp4" || name == "ecamera.hevc") {
     segments_[n].wide_road_cam = file;
-  } else if (name == "qcamera.ts") {
+  } else if (name == "qcamera.mp4" || name == "qcamera.ts") {
     segments_[n].qcamera = file;
   }
 }

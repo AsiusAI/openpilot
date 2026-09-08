@@ -5,7 +5,13 @@
 #include "openpilot/cereal/visionstream.h"
 #include "msgq/visionipc/visionipc_server.h"
 
+#ifdef __ASIUS_HARDWARE__
+#define CAM_ISP_IFE_IN_RES_PHY_0 0
+#define CAM_ISP_IFE_IN_RES_PHY_1 1
+#define CAM_ISP_IFE_IN_RES_PHY_2 2
+#else
 #include "media/cam_isp_ife.h"
+#endif
 
 
 typedef enum {
@@ -29,6 +35,12 @@ struct CameraConfig {
   bool staggered_sof;  // SOF is staggered (half-period offset) from other cameras
 };
 
+#ifdef __ASIUS_HARDWARE__
+constexpr float ROAD_CAMERA_FOCAL_LENGTH_MM = 4.35f;
+#else
+constexpr float ROAD_CAMERA_FOCAL_LENGTH_MM = 8.0f;
+#endif
+
 // NOTE: to be able to disable road and wide road, we still have to configure the sensor over i2c
 // If you don't do this, the strobe GPIO is an output (even in reset it seems!)
 const CameraConfig WIDE_ROAD_CAMERA_CONFIG = {
@@ -47,7 +59,7 @@ const CameraConfig WIDE_ROAD_CAMERA_CONFIG = {
 const CameraConfig NARROW_ROAD_CAMERA_CONFIG = {
   .camera_num = 1,
   .stream_type = VISION_STREAM_NARROW_ROAD,
-  .focal_len = 8.0,
+  .focal_len = ROAD_CAMERA_FOCAL_LENGTH_MM,
   .publish_name = "narrowRoadCameraState",
   .init_camera_state = &cereal::Event::Builder::initNarrowRoadCameraState,
   .enabled = !getenv("DISABLE_ROAD"),
@@ -63,7 +75,7 @@ const CameraConfig CABIN_CAMERA_CONFIG = {
   .focal_len = 1.71,
   .publish_name = "cabinCameraState",
   .init_camera_state = &cereal::Event::Builder::initCabinCameraState,
-  .enabled = !getenv("DISABLE_DRIVER"),
+  .enabled = !getenv("DISABLE_DRIVER") && !getenv("NO_DCAM"),
   .phy = CAM_ISP_IFE_IN_RES_PHY_2,
   .vignetting_correction = false,
   .output_type = ISP_BPS_PROCESSED,

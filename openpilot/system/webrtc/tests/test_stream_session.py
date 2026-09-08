@@ -8,7 +8,7 @@ from openpilot.cereal import messaging, log
 from teleoprtc.tracks import VIDEO_CLOCK_RATE
 
 from openpilot.system.webrtc.webrtcd import CerealOutgoingMessageProxy, CerealIncomingMessageProxy, ServerState, handle_get_stream
-from openpilot.system.webrtc.device.video import LiveStreamVideoStreamTrack
+from openpilot.system.webrtc.device.video import LiveStreamVideoStreamTrack, V4L2_BUF_FLAG_KEYFRAME
 
 
 class TestStreamSession(OpenpilotTestCase):
@@ -66,6 +66,7 @@ class TestStreamSession(OpenpilotTestCase):
 
   def test_livestream_track(self, mocker):
     fake_msg = messaging.new_message("livestreamCabinEncodeData")
+    fake_msg.livestreamCabinEncodeData.idx.flags = V4L2_BUF_FLAG_KEYFRAME
 
     config = {"receive.return_value": fake_msg.to_bytes()}
     mocker.patch("msgq.SubSocket", spec=True, **config)

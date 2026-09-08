@@ -11,6 +11,7 @@ import SCons.Errors
 from SCons.Defaults import _stripixes
 
 COMMA_HARDWARE = os.path.isfile('/AGNOS')
+ASIUS_HARDWARE = os.path.isfile('/ASIUS')
 
 SCons.Warnings.warningAsException(True)
 
@@ -24,7 +25,7 @@ release = not os.path.exists(File('#.gitattributes').abspath) # file absent on r
 AddOption('--minimal',
           action='store_false',
           dest='extras',
-          default=(not COMMA_HARDWARE and not release),
+          default=(not (COMMA_HARDWARE or ASIUS_HARDWARE) and not release),
           help='the minimum build to run openpilot. no tests, tools, etc.')
 
 submodule_python_paths = [
@@ -46,7 +47,7 @@ if external_pythonpath := os.environ.get("PYTHONPATH"):
 arch = subprocess.check_output(["uname", "-m"], encoding='utf8').rstrip()
 if platform.system() == "Darwin":
   arch = "Darwin"
-elif arch == "aarch64" and COMMA_HARDWARE:
+elif arch == "aarch64" and (COMMA_HARDWARE or ASIUS_HARDWARE):
   arch = "comma_arm64"
 assert arch in [
   "comma_arm64",  # linux comma hardware (AGNOS) arm64
@@ -55,7 +56,11 @@ assert arch in [
   "Darwin",       # macOS arm64 (x86 not supported)
 ]
 
-pkg_names = ['acados', 'capnproto', 'ffmpeg', 'json11', 'ncurses', 'zeromq', 'zstd']
+pkg_names = ['acados', 'capnproto', 'ffmpeg', 'json11', 'zeromq', 'zstd']
+# ncurses is only used by desktop replay tools, which are not built on the
+# headless Asius target. AGNOS includes the tools dependency in its base image.
+if not ASIUS_HARDWARE:
+  pkg_names.append('ncurses')
 pkgs = [importlib.import_module(name) for name in pkg_names]
 acados = pkgs[pkg_names.index('acados')]
 ffmpeg = pkgs[pkg_names.index('ffmpeg')]
@@ -181,7 +186,8 @@ if arch == "comma_arm64":
   env.Append(LIBPATH=[
     "/usr/lib/aarch64-linux-gnu",
   ])
-  arch_flags = ["-D__COMMA_HARDWARE__", "-mcpu=cortex-a57"]
+  hardware_flag = "-D__ASIUS_HARDWARE__" if ASIUS_HARDWARE else "-D__COMMA_HARDWARE__"
+  arch_flags = [hardware_flag, "-mcpu=cortex-a57"]
   env.Append(CCFLAGS=arch_flags)
   env.Append(CXXFLAGS=arch_flags)
 elif arch == "Darwin":
@@ -230,7 +236,7 @@ else:
 np_version = SCons.Script.Value(np.__version__)
 Export('envCython', 'np_version')
 
-Export('env', 'arch', 'acados', 'ffmpeg_libs')
+Export('env', 'arch', 'acados', 'ffmpeg_libs', 'ASIUS_HARDWARE')
 
 # Setup cache dir
 cache_dir = '/data/scons_cache' if arch == "comma_arm64" else '/tmp/scons_cache'
@@ -288,8 +294,10 @@ SConscript([
   'openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/SConscript',
   'openpilot/selfdrive/locationd/SConscript',
   'openpilot/selfdrive/modeld/SConscript',
-  'openpilot/selfdrive/ui/SConscript',
 ])
+
+if not ASIUS_HARDWARE:
+  SConscript(['openpilot/selfdrive/ui/SConscript'])
 
 # Build desktop-only tools
 if GetOption('extras') and arch != "comma_arm64":
