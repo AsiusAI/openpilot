@@ -4,6 +4,7 @@ import math
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -38,6 +39,10 @@ class TestEncoder(OpenpilotTestCase):
   COMMA_HARDWARE_TEST = True
 
   def setup_method(self):
+    # Hardware log_root() otherwise points at the device's real recordings.
+    log_dir = tempfile.TemporaryDirectory(prefix="encoder-test-", dir="/data" if ASIUS_HARDWARE or COMMA_HARDWARE else None)
+    self.addCleanup(log_dir.cleanup)
+    os.environ["LOG_ROOT"] = log_dir.name
     self._clear_logs()
     os.environ["LOGGERD_TEST"] = "1"
     os.environ["LOGGERD_SEGMENT_LENGTH"] = str(SEGMENT_LENGTH)
